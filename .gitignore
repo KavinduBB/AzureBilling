@@ -1,0 +1,34 @@
+# Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+TestResults/
+*.trx
+*.coverage
+coverage*.json
+coverage*.xml
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userprefs
+
+# Local config & secrets
+appsettings.Development.json
+appsettings.Local.json
+.env
+*.pfx
+*.snk
+
+# Local working files (not part of the project)
+_archive/
+*.zip
+
+# OS
+Thumbs.db
+.DS_Store
