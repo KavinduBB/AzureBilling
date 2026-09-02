@@ -75,6 +75,9 @@ builder.Services.AddSingleton(new SyncQueueOptions
 var serviceBusNamespace = builder.Configuration["Mlcp:ServiceBus:FullyQualifiedNamespace"];
 var serviceBusConnectionString = builder.Configuration.GetConnectionString("ServiceBus");
 
+var hasServiceBus = !string.IsNullOrWhiteSpace(serviceBusNamespace)
+    || !string.IsNullOrWhiteSpace(serviceBusConnectionString);
+
 if (!string.IsNullOrWhiteSpace(serviceBusNamespace))
 {
     builder.Services.AddSingleton(_ => new ServiceBusClient(serviceBusNamespace, new DefaultAzureCredential()));
@@ -82,6 +85,7 @@ if (!string.IsNullOrWhiteSpace(serviceBusNamespace))
 }
 else if (!string.IsNullOrWhiteSpace(serviceBusConnectionString))
 {
+    // Connection string only for the local emulator, which has no managed identity support.
     builder.Services.AddSingleton(_ => new ServiceBusClient(serviceBusConnectionString));
     builder.Services.AddSingleton<ISyncJobDispatcher, ServiceBusSyncJobDispatcher>();
 }
@@ -91,6 +95,14 @@ else
 }
 
 builder.Services.AddHostedService<CapabilityDiscoveryScheduler>();
+
+if (hasServiceBus)
+{
+    // Without a queue there is nothing to consume, and starting a processor against a client
+    // that does not exist would fail the worker on a developer machine that only wants the
+    // deletion sweep.
+    builder.Services.AddHostedService<SyncJobConsumer>();
+}
 builder.Services.AddHostedService<TenantDeletionJob>();
 
 builder.Services.Configure<HostOptions>(options =>
