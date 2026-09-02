@@ -43,72 +43,72 @@ public sealed class RedactionEnricher : ILogEventEnricher
         switch (value)
         {
             case ScalarValue { Value: string text }:
-            {
-                var redacted = SensitiveDataRedactor.Redact(text);
-                return string.Equals(redacted, text, StringComparison.Ordinal) ? null : new ScalarValue(redacted);
-            }
+                {
+                    var redacted = SensitiveDataRedactor.Redact(text);
+                    return string.Equals(redacted, text, StringComparison.Ordinal) ? null : new ScalarValue(redacted);
+                }
 
             case ScalarValue { Value: Uri uri }:
-            {
-                var redacted = SensitiveDataRedactor.RedactUri(uri.ToString());
-                return string.Equals(redacted, uri.ToString(), StringComparison.Ordinal) ? null : new ScalarValue(redacted);
-            }
+                {
+                    var redacted = SensitiveDataRedactor.RedactUri(uri.ToString());
+                    return string.Equals(redacted, uri.ToString(), StringComparison.Ordinal) ? null : new ScalarValue(redacted);
+                }
 
             case SequenceValue sequence:
-            {
-                LogEventPropertyValue[]? replacements = null;
-
-                for (var i = 0; i < sequence.Elements.Count; i++)
                 {
-                    if (Redact(sequence.Elements[i]) is not { } replacement)
+                    LogEventPropertyValue[]? replacements = null;
+
+                    for (var i = 0; i < sequence.Elements.Count; i++)
                     {
-                        continue;
+                        if (Redact(sequence.Elements[i]) is not { } replacement)
+                        {
+                            continue;
+                        }
+
+                        replacements ??= [.. sequence.Elements];
+                        replacements[i] = replacement;
                     }
 
-                    replacements ??= [.. sequence.Elements];
-                    replacements[i] = replacement;
+                    return replacements is null ? null : new SequenceValue(replacements);
                 }
-
-                return replacements is null ? null : new SequenceValue(replacements);
-            }
 
             case StructureValue structure:
-            {
-                List<LogEventProperty>? replacements = null;
-
-                for (var i = 0; i < structure.Properties.Count; i++)
                 {
-                    var property = structure.Properties[i];
+                    List<LogEventProperty>? replacements = null;
 
-                    if (Redact(property.Value) is not { } replacement)
+                    for (var i = 0; i < structure.Properties.Count; i++)
                     {
-                        continue;
+                        var property = structure.Properties[i];
+
+                        if (Redact(property.Value) is not { } replacement)
+                        {
+                            continue;
+                        }
+
+                        replacements ??= [.. structure.Properties];
+                        replacements[i] = new LogEventProperty(property.Name, replacement);
                     }
 
-                    replacements ??= [.. structure.Properties];
-                    replacements[i] = new LogEventProperty(property.Name, replacement);
+                    return replacements is null ? null : new StructureValue(replacements, structure.TypeTag);
                 }
-
-                return replacements is null ? null : new StructureValue(replacements, structure.TypeTag);
-            }
 
             case DictionaryValue dictionary:
-            {
-                Dictionary<ScalarValue, LogEventPropertyValue>? replacements = null;
-
-                foreach (var (key, element) in dictionary.Elements)
                 {
-                    if (Redact(element) is not { } replacement)
+                    Dictionary<ScalarValue, LogEventPropertyValue>? replacements = null;
+
+                    foreach (var (key, element) in dictionary.Elements)
                     {
-                        continue;
+                        if (Redact(element) is not { } replacement)
+                        {
+                            continue;
+                        }
+
+                        replacements ??= dictionary.Elements.ToDictionary(e => e.Key, e => e.Value);
+                        replacements[key] = replacement;
                     }
 
-                    replacements ??= dictionary.Elements.ToDictionary(e => e.Key, e => e.Value);
-                    replacements[key] = replacement;
+                    return replacements is null ? null : new DictionaryValue(replacements);
                 }
-
-                return replacements is null ? null : new DictionaryValue(replacements);
-            }
 
             default:
                 return null;

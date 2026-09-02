@@ -125,4 +125,19 @@ public class AppUser : TenantEntity
         LastSeenUtc = nowUtc;
         Touch(nowUtc);
     }
+
+    /// <summary>Persistence projection of <see cref="ScopeSubscriptionIds"/> as a JSON column.</summary>
+    private string ScopeSubscriptionIdsJson
+    {
+        get => DomainJson.Serialize(_scopeSubscriptionIds);
+        set
+        {
+            _scopeSubscriptionIds.Clear();
+
+            if (DomainJson.Deserialize<List<Guid>>(value) is { } restored)
+            {
+                _scopeSubscriptionIds.AddRange(restored);
+            }
+        }
+    }
 }

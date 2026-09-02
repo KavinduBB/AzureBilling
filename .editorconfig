@@ -31,3 +31,21 @@ indent_style = tab
 
 [*.md]
 trim_trailing_whitespace = false
+
+# EF Core writes these files. They are generated code and are not hand-maintained, so style
+# and design analyzers do not apply. Hand-written SQL in a migration still belongs in a
+# reviewed helper (see Mlcp.Persistence.Rls.TenantRlsScript) rather than inline here.
+[**/Migrations/*.cs]
+generated_code = true
+dotnet_analyzer_diagnostic.severity = none
+dotnet_diagnostic.CA1861.severity = none
+dotnet_diagnostic.CA1062.severity = none
+
+# Test projects. Underscored method names are the readable convention for test naming and are
+# never part of a public API surface.
+[tests/**/*.cs]
+dotnet_diagnostic.CA1707.severity = none
+# CA1711: xUnit's [CollectionDefinition] marker types read best named "<Thing>Collection".
+dotnet_diagnostic.CA1711.severity = none
+dotnet_diagnostic.CA1034.severity = none
+dotnet_diagnostic.CA1861.severity = none

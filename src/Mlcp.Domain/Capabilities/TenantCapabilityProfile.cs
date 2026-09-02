@@ -133,8 +133,8 @@ public class TenantCapabilityProfile : TenantEntity
                 status.Detail);
     }
 
-    /// <summary>Replaces the whole status map. Used by EF materialisation and discovery replay.</summary>
-    internal void ReplaceStatuses(IReadOnlyDictionary<Capability, CapabilityStatus> statuses)
+    /// <summary>Replaces the whole status map. Used by discovery replay.</summary>
+    public void ReplaceStatuses(IReadOnlyDictionary<Capability, CapabilityStatus> statuses)
     {
         ArgumentNullException.ThrowIfNull(statuses);
         _statuses.Clear();
@@ -142,6 +142,34 @@ public class TenantCapabilityProfile : TenantEntity
         foreach (var (capability, status) in statuses)
         {
             _statuses[capability] = status;
+        }
+    }
+
+    /// <summary>
+    /// Persistence projection of <see cref="Statuses"/>, mapped to a single JSON column.
+    /// </summary>
+    /// <remarks>
+    /// Private and named for its column rather than exposed as an API: the status map is read
+    /// through <see cref="Statuses"/> and written through the Mark* methods, and no caller
+    /// outside EF should be handling its serialised form.
+    /// </remarks>
+    private string StatusesJson
+    {
+        get => DomainJson.Serialize(_statuses);
+        set
+        {
+            var restored = DomainJson.Deserialize<Dictionary<Capability, CapabilityStatus>>(value);
+            _statuses.Clear();
+
+            if (restored is null)
+            {
+                return;
+            }
+
+            foreach (var (capability, status) in restored)
+            {
+                _statuses[capability] = status;
+            }
         }
     }
 }

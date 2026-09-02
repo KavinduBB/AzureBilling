@@ -29,13 +29,29 @@ public interface ITenantContext
     bool IsSystem { get; }
 
     /// <summary>True when a concrete tenant is in scope.</summary>
-    bool HasTenant => TenantId is not null;
+    bool HasTenant { get; }
 
     /// <summary>
     /// The current tenant, or a throw. Use wherever a missing tenant is a programming error
     /// rather than an expected state, so the failure is loud instead of a silent cross-tenant read.
     /// </summary>
-    Guid RequireTenantId()
-        => TenantId ?? throw new InvalidOperationException(
-            "No tenant is in scope. A tenant-scoped operation ran outside an authenticated request or a dispatched sync job.");
+    Guid RequireTenantId();
+}
+
+/// <summary>
+/// Shared implementations for <see cref="ITenantContext"/>.
+/// </summary>
+/// <remarks>
+/// Declared as real interface members with a helper here rather than as default interface
+/// implementations: a default implementation is invisible through the concrete type, so
+/// <c>tenantContext.RequireTenantId()</c> would fail to compile wherever the concrete class is
+/// held, which is exactly where it is most useful.
+/// </remarks>
+internal static class TenantContextGuards
+{
+    internal const string NoTenantMessage =
+        "No tenant is in scope. A tenant-scoped operation ran outside an authenticated request or a dispatched sync job.";
+
+    internal static Guid Require(Guid? tenantId)
+        => tenantId ?? throw new InvalidOperationException(NoTenantMessage);
 }

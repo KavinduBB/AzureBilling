@@ -20,6 +20,10 @@ public sealed class TenantContext : ITenantContext
 
     public bool IsSystem => _isSystem;
 
+    public bool HasTenant => _tenantId is not null;
+
+    public Guid RequireTenantId() => TenantContextGuards.Require(_tenantId);
+
     /// <summary>
     /// Binds this scope to a tenant. Called by the tenant-resolution middleware from the
     /// validated <c>tid</c> claim, or by the sync worker from the dispatched job message.
@@ -68,6 +72,10 @@ public sealed class FixedTenantContext(Guid? tenantId, bool isSystem = false) : 
     public Guid? TenantId { get; } = tenantId;
 
     public bool IsSystem { get; } = isSystem;
+
+    public bool HasTenant => TenantId is not null;
+
+    public Guid RequireTenantId() => TenantContextGuards.Require(TenantId);
 
     public static FixedTenantContext System { get; } = new(null, isSystem: true);
 

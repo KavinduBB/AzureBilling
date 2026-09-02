@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    # Linux runners ship a working Docker daemon, which the tenant-isolation suite needs to
+    # start SQL Server through Testcontainers.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Check formatting
+        # Style is enforced at build time by EnforceCodeStyleInBuild, but this reports
+        # violations as a diff rather than as an opaque analyzer error.
+        run: dotnet format --verify-no-changes --no-restore
+
+      - name: Build
+        # TreatWarningsAsErrors is on for the whole solution, so a new warning fails here.
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Unit tests
+        run: >
+          dotnet test tests/Mlcp.UnitTests/Mlcp.UnitTests.csproj
+          --no-build --configuration Release
+          --logger "trx;LogFileName=unit.trx"
+          --results-directory artifacts/test-results
+
+      - name: Integration and tenant-isolation tests
+        env:
+          # Turns a missing container runtime from a silent skip into a failure. Without this a
+          # runner whose Docker service failed would report green with the isolation suite
+          # never having executed.
+          MLCP_REQUIRE_DOCKER: "true"
+        run: >
+          dotnet test tests/Mlcp.IntegrationTests/Mlcp.IntegrationTests.csproj
+          --no-build --configuration Release
+          --logger "trx;LogFileName=integration.trx"
+          --results-directory artifacts/test-results
+
+      - name: Assert the tenant-isolation suite actually ran
+        # The suite is required on every PR touching Persistence, Application or Web
+        # (CLAUDE.md, "How to work in this repo"). A green build in which it was filtered out,
+        # skipped or renamed away would defeat the point, so its execution is verified rather
+        # than assumed.
+        run: |
+          set -euo pipefail
+          count=$(dotnet test tests/Mlcp.IntegrationTests/Mlcp.IntegrationTests.csproj \
+            --no-build --configuration Release \
+            --filter 'Category=TenantIsolation' \
+            --logger "console;verbosity=normal" \
+            | tee /dev/stderr | grep -cE '^\s+Passed ' || true)
+          echo "Tenant-isolation tests passed: $count"
+          if [ "$count" -lt 10 ]; then
+            echo "::error::Expected at least 10 passing tenant-isolation tests, saw $count."
+            exit 1
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: artifacts/test-results
+          if-no-files-found: ignore
+
+  migrations:
+    name: Migrations apply cleanly
+    runs-on: ubuntu-latest
+
+    services:
+      sql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "Ci_Password_1"
+          MSSQL_PID: Developer
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Ci_Password_1 -C -Q 'SELECT 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+          --health-start-period 30s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore tools
+        run: dotnet tool restore
+
+      - name: Apply migrations to an empty database
+        # Catches what a model-only test cannot: hand-written SQL in a migration that is
+        # invalid, out of order, or depends on an object the previous migration did not create.
+        env:
+          MLCP_MIGRATIONS_CONNECTION: "Server=localhost,1433;Database=MlcpCi;User Id=sa;Password=Ci_Password_1;TrustServerCertificate=True;Encrypt=True"
+        run: >
+          dotnet dotnet-ef database update
+          --project src/Mlcp.Persistence
+          --startup-project src/Mlcp.Web
