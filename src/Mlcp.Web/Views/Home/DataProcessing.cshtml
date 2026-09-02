@@ -1,0 +1,79 @@
+@{
+    ViewData["Title"] = "Data processing";
+}
+
+<h1>Data processing</h1>
+
+<div class="alert alert-warning" role="note">
+    <strong>Draft.</strong> This page states the processing facts as the platform is actually
+    built. The binding data processing agreement must be reviewed by counsel and executed before
+    the first paying customer, per <code>docs/03-architecture.md</code> §8.
+</div>
+
+<h2 class="h5">Roles</h2>
+<p>
+    Your organisation is the <strong>controller</strong> of the personal data MLCP reads from your
+    Microsoft tenant. MLCP is the <strong>processor</strong>, and processes it only to provide the
+    service you have connected.
+</p>
+
+<h2 class="h5">Categories of personal data</h2>
+<ul>
+    <li>Work contact identifiers: user principal name, display name, object id</li>
+    <li>Organisational attributes: department, company name, office location, usage location</li>
+    <li>Account state: whether the account is enabled, which licences are assigned</li>
+    <li>Service usage summaries, where usage insights are enabled</li>
+</ul>
+<p class="text-muted">
+    No special category data. No content of communications or documents at any tier.
+</p>
+
+<h2 class="h5">Subprocessors</h2>
+<table class="table align-middle">
+    <thead>
+        <tr>
+            <th scope="col">Subprocessor</th>
+            <th scope="col">Purpose</th>
+            <th scope="col">Location</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Microsoft Azure</td>
+            <td>Hosting, database, cache, messaging, key management, email delivery</td>
+            <td>The region your organisation selected at connection</td>
+        </tr>
+    </tbody>
+</table>
+<p class="text-muted">
+    We will give notice before adding a subprocessor, and you may object.
+</p>
+
+<h2 class="h5">Retention</h2>
+<ul>
+    <li>Operational data is retained while your organisation is connected.</li>
+    <li>Disconnection begins a 30-day grace period, then permanent deletion.</li>
+    <li>Audit records of financial reads and write operations are retained for the account
+        lifetime, because they exist to answer "who changed this".</li>
+    <li>After deletion we keep only a dated certificate that the deletion occurred, containing no
+        personal data.</li>
+</ul>
+
+<h2 class="h5">Security measures</h2>
+<ul>
+    <li>Encryption in transit (TLS 1.2 or better) and at rest.</li>
+    <li>Four-layer tenant isolation, including row-level security enforced by the database.</li>
+    <li>Credentials held as certificates and keys in Azure Key Vault, reached by managed identity.</li>
+    <li>No customer access or refresh tokens in application tables.</li>
+    <li>Structured logging with automatic redaction of credentials and signed URLs.</li>
+    <li>Private networking between application and data services.</li>
+</ul>
+
+<h2 class="h5">Assistance and breach notification</h2>
+<p>
+    We will assist you with data subject requests and, in the event of a personal data breach
+    affecting your data, notify you without undue delay with the information you need to meet your
+    own obligations.
+</p>
+
+<p><a asp-action="Privacy">Back to the privacy summary</a></p>

@@ -1,0 +1,71 @@
+@{
+    ViewData["Title"] = "Microsoft licence and cost management";
+}
+
+<div class="py-4">
+    <h1>See what you own, what you use, and what it costs</h1>
+
+    <p class="lead">
+        MLCP connects to your Microsoft Entra tenant and shows your licences, who has them, whether
+        they are being used, and &mdash; where your agreement allows it &mdash; what you actually
+        pay. Sign in with your work account to start.
+    </p>
+
+    <p>
+        <a class="btn btn-primary btn-lg" asp-area="MicrosoftIdentity" asp-controller="Account" asp-action="SignIn">
+            Sign in with Microsoft
+        </a>
+    </p>
+</div>
+
+<hr />
+
+<h2 class="h4">Every organisation gets the same starting point</h2>
+
+<p>
+    Licences, assignments, renewal dates and waste detection work for every tenant on day one,
+    through Microsoft Graph alone. Everything beyond that is a separate unlock you grant, and can
+    revoke, at any time.
+</p>
+
+<div class="row g-4 mt-1">
+    <div class="col-md-3">
+        <h3 class="h6">Always included</h3>
+        <p class="text-muted small">
+            Licences purchased and assigned, unused seats, seats on disabled accounts, overlapping
+            products, renewal calendar.
+        </p>
+    </div>
+    <div class="col-md-3">
+        <h3 class="h6">With usage consent</h3>
+        <p class="text-muted small">
+            Which services people actually use, who has been inactive for 90 days, Copilot adoption.
+        </p>
+    </div>
+    <div class="col-md-3">
+        <h3 class="h6">With an Azure role</h3>
+        <p class="text-muted small">
+            Azure spend by subscription, resource group, resource and tag, with trends and forecast.
+        </p>
+    </div>
+    <div class="col-md-3">
+        <h3 class="h6">With a billing role</h3>
+        <p class="text-muted small">
+            The prices you actually pay, invoices, auto-renew status and term end dates.
+        </p>
+    </div>
+</div>
+
+<h2 class="h4 mt-5">What we are honest about</h2>
+
+<p>
+    Not every organisation can see every figure, and that is a limit of what Microsoft exposes
+    rather than a limit of the product. If your licences come from a partner, or you are still on
+    the older online subscription agreement, no API gives anyone your seat prices. We say so
+    plainly, and let you enter the numbers yourself, instead of showing you an empty chart.
+</p>
+
+<p class="text-muted">
+    We never read your email, files or messages. We cannot buy, assign or remove licences unless
+    you separately turn that on. <a asp-action="Privacy">Read the privacy summary</a>.
+</p>

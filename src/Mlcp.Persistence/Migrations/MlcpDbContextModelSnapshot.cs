@@ -259,6 +259,47 @@ namespace Mlcp.Persistence.Migrations
                     b.ToTable("AppUser", (string)null);
                 });
 
+            modelBuilder.Entity("Mlcp.Domain.Tenancy.DeletionCertificate", b =>
+                {
+                    b.Property<Guid>("DeletionCertificateId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset>("DeletedUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset>("DisconnectedUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("RowCountsByTable")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("RowsDeleted")
+                        .HasColumnType("int");
+
+                    b.Property<string>("TenantDisplayName")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("DeletionCertificateId");
+
+                    b.HasIndex("DeletedUtc");
+
+                    b.HasIndex("TenantId");
+
+                    b.ToTable("DeletionCertificate", (string)null);
+                });
+
             modelBuilder.Entity("Mlcp.Domain.Tenancy.OnboardingStep", b =>
                 {
                     b.Property<Guid>("OnboardingStepId")

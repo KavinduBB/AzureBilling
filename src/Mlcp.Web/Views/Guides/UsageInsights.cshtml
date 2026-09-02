@@ -1,0 +1,28 @@
+@{
+    ViewData["Title"] = "Usage insights and the privacy setting";
+}
+
+<h1>Usage insights and the privacy setting</h1>
+
+<p class="lead">Usage insights need a separate, optional consent: <strong>Read all usage
+reports</strong>. It is not part of connecting your organisation.</p>
+
+<p>
+    By default Microsoft hides user names in usage reports. We can show <strong>how many</strong>
+    licensed users are active per service without changing anything at all.
+</p>
+
+<div class="alert alert-warning" role="note">
+    To see <strong>which</strong> users or departments are inactive, an administrator must turn off
+    <em>Display concealed user, group, and site names in all reports</em> in
+    <strong>Microsoft 365 admin centre &rarr; Settings &rarr; Org settings &rarr; Reports</strong>.
+    That changes what every administrator in your organisation sees in Microsoft's own reports too,
+    not just here.
+</div>
+
+<p class="text-muted">
+    MLCP will never change this setting for you. We record only that you told us you had changed
+    it, and you can tell us to stop using identifiable names at any time.
+</p>
+
+<a class="btn btn-primary" asp-controller="Onboarding" asp-action="Index">Back to connection status</a>

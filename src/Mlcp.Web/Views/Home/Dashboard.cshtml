@@ -1,0 +1,40 @@
+@using Mlcp.Domain.Tenancy
+@model Tenant
+@{
+    ViewData["Title"] = "Dashboard";
+}
+
+<h1>@Model.DisplayName</h1>
+
+<p class="lead">Your organisation is connected and synchronising.</p>
+
+@* Phase 0 ships the foundation, not the dashboards. Saying so is better than rendering empty
+   cards that would read as "you have no licences" (CLAUDE.md rule 9). *@
+<div class="alert alert-info" role="status">
+    <strong>Licence and cost views arrive in Phase 1.</strong> The connection, capability
+    discovery and synchronisation framework are in place; the dashboards that read from them are
+    the next milestone. Meanwhile the
+    <a asp-controller="Onboarding" asp-action="Index">connection status page</a> shows exactly
+    which data sources your agreement makes available.
+</div>
+
+<dl class="row">
+    <dt class="col-sm-3">Agreement</dt>
+    <dd class="col-sm-9">@Model.AgreementTypePrimary</dd>
+
+    <dt class="col-sm-3">Region</dt>
+    <dd class="col-sm-9">@Model.Region</dd>
+
+    <dt class="col-sm-3">Connected</dt>
+    <dd class="col-sm-9">
+        @(Model.ConsentGrantedUtc?.ToString("d MMMM yyyy") ?? "Not yet")
+    </dd>
+
+    @if (Model.IsPartnerManaged)
+    {
+        <dt class="col-sm-3">Licence source</dt>
+        <dd class="col-sm-9">Sold through a partner</dd>
+    }
+</dl>
+
+<a class="btn btn-outline-primary" asp-controller="Onboarding" asp-action="Index">Connection status</a>

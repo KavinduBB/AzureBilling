@@ -1,0 +1,48 @@
+@model Mlcp.Web.Models.ConsentLandingViewModel
+@{
+    ViewData["Title"] = "A colleague has asked you to connect your organisation";
+}
+
+<h1>Connect your organisation to MLCP</h1>
+
+<p class="lead">
+    <strong>@Model.RequestedByUpn</strong> has asked you to connect your organisation so your team
+    can track Microsoft licences, usage and Azure spend.
+</p>
+
+<h2 class="h5">What we ask for</h2>
+
+<table class="table align-middle">
+    <thead>
+        <tr>
+            <th scope="col">Permission</th>
+            <th scope="col">What it lets us read</th>
+            <th scope="col">What it does not do</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Read organisation information</td>
+            <td>Purchased licences and subscription renewal dates</td>
+            <td>Nothing about individual users</td>
+        </tr>
+        <tr>
+            <td>Read all users' basic profiles</td>
+            <td>Which licences are assigned to whom, and whether accounts are active</td>
+            <td>Cannot read email, files, messages or passwords; cannot change anything</td>
+        </tr>
+    </tbody>
+</table>
+
+<p class="text-muted">
+    You will see this list again on Microsoft's own consent screen before anything is granted, and
+    you can revoke access at any time from
+    <strong>Entra admin centre &rarr; Enterprise applications</strong>.
+</p>
+
+<form asp-action="Connect" method="post">
+    @Html.AntiForgeryToken()
+    <button type="submit" class="btn btn-primary">Review permissions and connect</button>
+</form>
+
+<p class="text-muted small mt-3">This request expires on @Model.ExpiresUtc.ToString("d MMMM yyyy").</p>

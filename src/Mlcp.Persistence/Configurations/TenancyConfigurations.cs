@@ -129,3 +129,20 @@ internal sealed class AppUserConfiguration : IEntityTypeConfiguration<AppUser>
             .OnDelete(DeleteBehavior.Cascade);
     }
 }
+
+internal sealed class DeletionCertificateConfiguration : IEntityTypeConfiguration<DeletionCertificate>
+{
+    public void Configure(EntityTypeBuilder<DeletionCertificate> builder)
+    {
+        builder.ToTable("DeletionCertificate");
+        builder.HasKey(c => c.DeletionCertificateId);
+
+        builder.Property(c => c.TenantDisplayName).HasMaxLength(256).IsRequired();
+        builder.Property(c => c.RowCountsByTable).HasColumnType("nvarchar(max)").IsRequired();
+        builder.Property(c => c.CorrelationId).HasMaxLength(64).IsRequired();
+
+        // No foreign key to Tenant: the row it described no longer exists, which is the point.
+        builder.HasIndex(c => c.TenantId);
+        builder.HasIndex(c => c.DeletedUtc);
+    }
+}

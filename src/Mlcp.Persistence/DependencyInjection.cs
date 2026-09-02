@@ -1,6 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Mlcp.Application.Onboarding;
+using Mlcp.Application.Sync;
 using Mlcp.Persistence.Interceptors;
+using Mlcp.Persistence.Stores;
 using Mlcp.Shared.Resilience;
 using Mlcp.Shared.Tenancy;
 
@@ -10,7 +13,7 @@ public static class DependencyInjection
 {
     /// <summary>
     /// Registers the tenant-scoped database context used by request handling and by sync jobs
-    /// that operate on one tenant.
+    /// that operate on one tenant, together with the stores built on it.
     /// </summary>
     /// <remarks>
     /// The context and its interceptor are both scoped, and both read the same scoped
@@ -30,11 +33,23 @@ public static class DependencyInjection
             options.UseSqlServer(connectionString, sql =>
             {
                 sql.MigrationsAssembly(typeof(MlcpDbContext).Assembly.FullName);
-                sql.EnableRetryOnFailure();
+
+                // Azure SQL drops idle connections and fails over between replicas; without
+                // this a routine platform event surfaces to a user as an error page.
+                sql.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(10), errorNumbersToAdd: null);
             });
 
             options.AddInterceptors(serviceProvider.GetRequiredService<TenantSessionInterceptor>());
         });
+
+        services.AddScoped<IOnboardingRepository, OnboardingRepository>();
+        services.AddScoped<ITenantOnboardingStore, TenantOnboardingStore>();
+        services.AddScoped<ISyncRunStore, SyncRunStore>();
+
+        // The scoped signal only ever touches the tenant already in scope. The sync worker
+        // replaces it with the system-context one, which can reach any tenant, by calling
+        // AddMlcpSystemPersistence afterwards.
+        services.AddScoped<ITenantReconsentSignal, ScopedTenantReconsentSignal>();
 
         return services;
     }

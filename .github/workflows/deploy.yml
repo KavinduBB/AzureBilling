@@ -1,0 +1,175 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: prod
+        type: choice
+        options: [test, prod]
+
+# Federated credentials, not a stored secret. The workflow gets a short-lived token from Entra
+# for this repository and environment only; there is no long-lived Azure credential to leak.
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  # One deployment at a time per environment. Two overlapping runs would race on migrations.
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  build-images:
+    name: Build and push images
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tag
+        id: meta
+        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Registry login
+        run: az acr login --name ${{ vars.ACR_NAME }}
+
+      - name: Build and push web
+        run: |
+          set -euo pipefail
+          docker build -f src/Mlcp.Web/Dockerfile \
+            -t ${{ vars.ACR_NAME }}.azurecr.io/mlcp-web:${{ steps.meta.outputs.tag }} .
+          docker push ${{ vars.ACR_NAME }}.azurecr.io/mlcp-web:${{ steps.meta.outputs.tag }}
+
+      - name: Build and push sync worker
+        run: |
+          set -euo pipefail
+          docker build -f src/Mlcp.Sync/Dockerfile \
+            -t ${{ vars.ACR_NAME }}.azurecr.io/mlcp-sync:${{ steps.meta.outputs.tag }} .
+          docker push ${{ vars.ACR_NAME }}.azurecr.io/mlcp-sync:${{ steps.meta.outputs.tag }}
+
+  deploy-infrastructure:
+    name: Deploy infrastructure
+    runs-on: ubuntu-latest
+    needs: build-images
+    environment: ${{ inputs.environment }}
+    outputs:
+      sqlServerFqdn: ${{ steps.deploy.outputs.sqlServerFqdn }}
+      webFqdn: ${{ steps.deploy.outputs.webFqdn }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: What-if
+        # Printed before the change so a reviewer can see what a deployment is about to do to a
+        # live environment, rather than reading it afterwards in the activity log.
+        run: |
+          az deployment group what-if \
+            --resource-group ${{ vars.RESOURCE_GROUP }} \
+            --template-file infra/main.bicep \
+            --parameters \
+                environmentName=${{ inputs.environment }} \
+                entraClientId=${{ vars.ENTRA_CLIENT_ID }} \
+                sqlAdminGroupObjectId=${{ vars.SQL_ADMIN_GROUP_OBJECT_ID }} \
+                sqlAdminGroupName='${{ vars.SQL_ADMIN_GROUP_NAME }}' \
+                containerRegistryServer=${{ vars.ACR_NAME }}.azurecr.io \
+                webImage=${{ vars.ACR_NAME }}.azurecr.io/mlcp-web:${{ needs.build-images.outputs.tag }} \
+                syncImage=${{ vars.ACR_NAME }}.azurecr.io/mlcp-sync:${{ needs.build-images.outputs.tag }} \
+                emailEndpoint='${{ vars.EMAIL_ENDPOINT }}' \
+                emailSenderAddress='${{ vars.EMAIL_SENDER_ADDRESS }}'
+
+      - name: Deploy
+        id: deploy
+        run: |
+          set -euo pipefail
+          outputs=$(az deployment group create \
+            --resource-group ${{ vars.RESOURCE_GROUP }} \
+            --template-file infra/main.bicep \
+            --parameters \
+                environmentName=${{ inputs.environment }} \
+                entraClientId=${{ vars.ENTRA_CLIENT_ID }} \
+                sqlAdminGroupObjectId=${{ vars.SQL_ADMIN_GROUP_OBJECT_ID }} \
+                sqlAdminGroupName='${{ vars.SQL_ADMIN_GROUP_NAME }}' \
+                containerRegistryServer=${{ vars.ACR_NAME }}.azurecr.io \
+                webImage=${{ vars.ACR_NAME }}.azurecr.io/mlcp-web:${{ needs.build-images.outputs.tag }} \
+                syncImage=${{ vars.ACR_NAME }}.azurecr.io/mlcp-sync:${{ needs.build-images.outputs.tag }} \
+                emailEndpoint='${{ vars.EMAIL_ENDPOINT }}' \
+                emailSenderAddress='${{ vars.EMAIL_SENDER_ADDRESS }}' \
+            --query properties.outputs -o json)
+
+          echo "sqlServerFqdn=$(echo "$outputs" | jq -r .sqlServerFqdn.value)" >> "$GITHUB_OUTPUT"
+          echo "webFqdn=$(echo "$outputs" | jq -r .webFqdn.value)" >> "$GITHUB_OUTPUT"
+
+  migrate:
+    name: Apply migrations
+    runs-on: ubuntu-latest
+    needs: deploy-infrastructure
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Restore tools
+        run: dotnet tool restore
+
+      - name: Apply migrations
+        # SQL is Entra-only and network-restricted, so this step needs the deployment identity to
+        # be a member of the SQL admin group and the runner to be able to reach the server. On a
+        # locked-down network, replace this job with a self-hosted runner inside the VNet.
+        env:
+          MLCP_MIGRATIONS_CONNECTION: "Server=tcp:${{ needs.deploy-infrastructure.outputs.sqlServerFqdn }},1433;Initial Catalog=mlcp;Authentication=Active Directory Default;Encrypt=True;"
+        run: >
+          dotnet dotnet-ef database update
+          --project src/Mlcp.Persistence
+          --startup-project src/Mlcp.Web
+
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, migrate]
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Health check
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 20); do
+            if curl -fsS "https://${{ needs.deploy-infrastructure.outputs.webFqdn }}/health" > /dev/null; then
+              echo "Healthy after $attempt attempt(s)."
+              exit 0
+            fi
+            echo "Not healthy yet (attempt $attempt); waiting."
+            sleep 15
+          done
+          echo "::error::The application did not become healthy."
+          exit 1

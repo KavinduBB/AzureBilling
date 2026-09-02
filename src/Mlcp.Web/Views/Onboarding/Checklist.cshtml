@@ -1,0 +1,122 @@
+@using Mlcp.Domain.Capabilities
+@using Mlcp.Domain.Tenancy
+@model Mlcp.Application.Onboarding.OnboardingChecklist
+@{
+    ViewData["Title"] = "Connection status";
+
+    static string GuideAnchor(RemediationGuide guide) => guide switch
+    {
+        RemediationGuide.ConnectOrganisation => "/guides/connect-organisation",
+        RemediationGuide.AzureRbac => "/guides/azure-costs",
+        RemediationGuide.BillingRole => "/guides/prices-and-invoices",
+        RemediationGuide.UsageInsights => "/guides/usage-insights",
+        RemediationGuide.PartnerManaged => "/guides/partner-managed",
+        RemediationGuide.ManualPricing => "/prices",
+        _ => string.Empty,
+    };
+
+    static string GuideCallToAction(RemediationGuide guide) => guide switch
+    {
+        RemediationGuide.AzureRbac => "How to assign the role",
+        RemediationGuide.BillingRole => "How to grant billing access",
+        RemediationGuide.UsageInsights => "Turn on usage insights",
+        RemediationGuide.PartnerManaged => "What partner-managed means",
+        RemediationGuide.ManualPricing => "Enter your prices",
+        _ => "How to fix this",
+    };
+
+    static string AgreementLabel(AgreementType agreement) => agreement switch
+    {
+        AgreementType.Mca => "Microsoft Customer Agreement",
+        AgreementType.Ea => "Enterprise Agreement",
+        AgreementType.Mosa => "Microsoft Online Subscription Agreement",
+        AgreementType.Mpa => "Microsoft Partner Agreement",
+        AgreementType.CspManaged => "Managed by a partner",
+        AgreementType.NotDiscovered => "Not yet determined",
+        _ => "Unrecognised",
+    };
+}
+
+<h1>Connection status</h1>
+
+<p class="lead">
+    @Model.CompletedCount of @Model.Items.Count unlocked &middot;
+    <span class="text-muted">@AgreementLabel(Model.AgreementType)</span>
+</p>
+
+@if (Model.IsPartnerManaged)
+{
+    <div class="alert alert-secondary" role="note">
+        Your Microsoft licences are sold to you by a partner. Microsoft does not expose what your
+        partner charges you, so prices and invoices come from you or from your partner rather than
+        from an API. Everything else works normally.
+    </div>
+}
+
+<ol class="list-unstyled">
+@foreach (var item in Model.Items)
+{
+    var state = item.IsComplete ? "complete" : item.IsActionable ? "actionable" : "explained";
+
+    <li class="card mb-3" data-state="@state">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start gap-3">
+                <div>
+                    <h2 class="h5 card-title mb-1">
+                        @if (item.IsComplete)
+                        {
+                            <span class="badge text-bg-success me-2" aria-label="Unlocked">&check;</span>
+                        }
+                        else if (item.IsActionable)
+                        {
+                            <span class="badge text-bg-warning me-2" aria-label="Action needed">!</span>
+                        }
+                        else
+                        {
+                            <span class="badge text-bg-secondary me-2" aria-label="Not available">&ndash;</span>
+                        }
+                        @item.Title
+                    </h2>
+                    <p class="card-text text-muted mb-2">@item.Unlocks</p>
+
+                    @* Unavailable data is always an explained state, never a blank panel
+                       (CLAUDE.md rule 9). *@
+                    @if (!item.IsComplete && item.Detail is { Length: > 0 } detail)
+                    {
+                        <p class="card-text mb-0">@detail</p>
+                    }
+                </div>
+
+                @if (!item.IsComplete && item.Guide != RemediationGuide.None)
+                {
+                    <a class="btn @(item.IsActionable ? "btn-primary" : "btn-outline-secondary") text-nowrap"
+                       href="@GuideAnchor(item.Guide)">@GuideCallToAction(item.Guide)</a>
+                }
+            </div>
+        </div>
+    </li>
+}
+</ol>
+
+@if (Model.Explanations.Count > 0)
+{
+    <h2 class="h6 text-muted mt-4">Why some things stay locked</h2>
+    <p class="text-muted">
+        The items marked with a dash cannot be unlocked by granting anything. They depend on the
+        commercial agreement your organisation holds with Microsoft, not on permissions. Where
+        that is the case we say so rather than sending you to a settings page that will not help.
+    </p>
+}
+
+<hr class="mt-5" />
+
+<h2 class="h6">Disconnect</h2>
+<p class="text-muted">
+    Disconnecting stops all synchronisation immediately and schedules your data for deletion
+    30 days later. You can reverse it at any point during those 30 days.
+</p>
+<form asp-action="Disconnect" method="post"
+      onsubmit="return confirm('Disconnect this organisation and schedule all of its data for deletion in 30 days?');">
+    @Html.AntiForgeryToken()
+    <button type="submit" class="btn btn-outline-danger btn-sm">Disconnect this organisation</button>
+</form>

@@ -73,8 +73,8 @@ jobs:
             --logger "console;verbosity=normal" \
             | tee /dev/stderr | grep -cE '^\s+Passed ' || true)
           echo "Tenant-isolation tests passed: $count"
-          if [ "$count" -lt 10 ]; then
-            echo "::error::Expected at least 10 passing tenant-isolation tests, saw $count."
+          if [ "$count" -lt 14 ]; then
+            echo "::error::Expected at least 14 passing tenant-isolation tests, saw $count."
             exit 1
           fi
 

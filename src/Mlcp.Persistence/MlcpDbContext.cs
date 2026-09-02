@@ -69,6 +69,12 @@ public class MlcpDbContext : DbContext
 
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
+    /// <summary>
+    /// Records that a tenant's data was destroyed. Not tenant-scoped and outside row-level
+    /// security by design: it has to outlive the tenant it describes.
+    /// </summary>
+    public DbSet<DeletionCertificate> DeletionCertificates => Set<DeletionCertificate>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         ArgumentNullException.ThrowIfNull(modelBuilder);

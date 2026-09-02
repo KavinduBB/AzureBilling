@@ -1,0 +1,53 @@
+@{
+    ViewData["Title"] = "Connect your organisation";
+}
+
+<h1>Connect your organisation</h1>
+
+<p class="lead"><strong>Who can do this:</strong> a Global Administrator or Privileged Role
+Administrator in your Microsoft Entra tenant.</p>
+
+<h2 class="h5">What we ask for and why</h2>
+
+<table class="table align-middle">
+    <thead>
+        <tr>
+            <th scope="col">Permission</th>
+            <th scope="col">What it lets us read</th>
+            <th scope="col">What it does not do</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Read organisation information</td>
+            <td>Your purchased licences and subscription renewal dates</td>
+            <td>Nothing about individual users</td>
+        </tr>
+        <tr>
+            <td>Read all users' basic profiles</td>
+            <td>Which licences are assigned to which people, and whether accounts are active</td>
+            <td>Cannot read email, files, messages or passwords; cannot change anything</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>
+    We never buy, assign or remove licences with these permissions. You can revoke access at any
+    time from <strong>Entra admin centre &rarr; Enterprise applications &rarr; MLCP &rarr;
+    Permissions</strong>.
+</p>
+
+<h2 class="h5">Steps</h2>
+<ol>
+    <li>Click <strong>Connect as administrator</strong>.</li>
+    <li>Sign in with your admin account. Multi-factor authentication may be required.</li>
+    <li>Review the permissions and click <strong>Accept</strong>.</li>
+    <li>You will return here. Discovery takes one to two minutes.</li>
+</ol>
+
+<p class="text-muted">
+    <strong>If you are not an administrator:</strong> use <em>Send request to my admin</em> and we
+    will email them this page with a one-click link.
+</p>
+
+<a class="btn btn-primary" asp-controller="Onboarding" asp-action="Index">Back to connection status</a>

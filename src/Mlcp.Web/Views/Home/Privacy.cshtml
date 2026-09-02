@@ -1,6 +1,95 @@
-﻿@{
-    ViewData["Title"] = "Privacy Policy";
+@{
+    ViewData["Title"] = "Privacy";
 }
-<h1>@ViewData["Title"]</h1>
 
-<p>Use this page to detail your site's privacy policy.</p>
+<h1>Privacy</h1>
+
+<p class="lead">
+    This page summarises what MLCP reads, what it stores, where it stores it, and how to get rid
+    of it. It is a plain-language summary, not a substitute for the data processing agreement.
+</p>
+
+<h2 class="h5">What we read from your Microsoft tenant</h2>
+
+<table class="table align-middle">
+    <thead>
+        <tr>
+            <th scope="col">Data</th>
+            <th scope="col">Why</th>
+            <th scope="col">Only if you grant</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Purchased licences, subscriptions and renewal dates</td>
+            <td>To show what you own and when it renews</td>
+            <td>Directory read consent</td>
+        </tr>
+        <tr>
+            <td>User principal name, display name, department, whether the account is enabled, and which licences are assigned</td>
+            <td>To show who has what, and to find seats assigned to disabled or inactive accounts</td>
+            <td>Directory read consent</td>
+        </tr>
+        <tr>
+            <td>Service usage summaries per user</td>
+            <td>To show which licensed services are actually used</td>
+            <td>Usage reports consent, separately</td>
+        </tr>
+        <tr>
+            <td>Azure consumption by subscription, resource group and meter</td>
+            <td>To show Azure spend and forecast</td>
+            <td>An Azure role you assign</td>
+        </tr>
+        <tr>
+            <td>Billing transactions and invoice metadata</td>
+            <td>To show what you actually pay per seat</td>
+            <td>A billing role you assign</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2 class="h5">What we never read</h2>
+<p>
+    Email, files, calendars, chat messages, Teams content, SharePoint documents, or anything else
+    inside your users' mailboxes or drives. The permissions we request do not grant access to any
+    of it, and cannot be widened without a new consent that an administrator has to approve.
+</p>
+
+<h2 class="h5">User names in usage reports</h2>
+<p>
+    Microsoft hides user names in usage reports by default. We leave that setting exactly as we
+    find it. If your administrator chooses to turn it off, we record that they told us so, and you
+    can tell us to stop using identifiable names at any time. We never change the setting for you.
+</p>
+
+<h2 class="h5">Tokens and credentials</h2>
+<p>
+    We never store your users' access or refresh tokens in our database. They live only in an
+    encrypted distributed cache, protected with keys held in Azure Key Vault. Our own credential
+    for calling Microsoft is a certificate in Key Vault, not a password, and we hold no credential
+    capable of reading your data outside the permissions you granted.
+</p>
+
+<h2 class="h5">Where your data lives</h2>
+<p>
+    In the Azure region chosen when your organisation connected, and only there. We do not move a
+    tenant between regions without asking. Each organisation's data is isolated at four levels,
+    including row-level security enforced by the database itself, so a fault in application code
+    cannot expose one customer's data to another.
+</p>
+
+<h2 class="h5">Getting your data out, and deleting it</h2>
+<p>
+    Any Owner can disconnect the organisation from the connection status page. Synchronisation
+    stops immediately, and everything we hold is permanently deleted 30 days later. During those
+    30 days you can reverse it. After deletion we retain only a dated record that the deletion
+    happened, which contains no customer data.
+</p>
+
+<p>
+    To revoke our access entirely, remove MLCP from
+    <strong>Entra admin centre &rarr; Enterprise applications</strong>. Disconnecting stops us
+    using the permissions; removing the application withdraws them.
+</p>
+
+<p><a asp-action="DataProcessing">Data processing agreement and subprocessors</a></p>

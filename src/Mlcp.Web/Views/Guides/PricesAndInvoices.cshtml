@@ -1,0 +1,39 @@
+@{
+    ViewData["Title"] = "Unlock prices and invoices";
+}
+
+<h1>Unlock prices and invoices</h1>
+
+<p class="lead"><strong>Applies to:</strong> organisations on a <strong>Microsoft Customer
+Agreement</strong>. If you bought online before 2023 you may still be on the older agreement; it
+moves automatically at your next renewal.</p>
+
+<p><strong>Who can do this:</strong> a <strong>Billing account owner</strong>. A Global
+Administrator can make themselves one from the Azure portal under
+<em>Cost Management + Billing &rarr; Access control (IAM) &rarr; Elevate access</em>.</p>
+
+<div class="alert alert-info" role="note">
+    <strong>Why a third step.</strong> Billing permissions are separate from both app consent and
+    Azure resource permissions. You can complete both of those and still see no prices. We need
+    read-only access to your billing account.
+</div>
+
+<h2 class="h5">Steps</h2>
+<ol>
+    <li>Azure portal &rarr; <strong>Cost Management + Billing</strong> &rarr; select your billing
+        account.</li>
+    <li><strong>Access control (IAM) &rarr; Add</strong>.</li>
+    <li>Role: <strong>Billing account reader</strong> for prices, subscriptions and renewals; add
+        <strong>Invoice manager</strong> if you want invoice downloads.</li>
+    <li>Member: search <strong>MLCP</strong> &rarr; Add.</li>
+</ol>
+
+<h2 class="h5">What this unlocks</h2>
+<ul>
+    <li>The per-seat prices you actually pay, not list prices</li>
+    <li>Monthly invoices, downloaded on demand and never stored by us</li>
+    <li>Auto-renew status and term end dates</li>
+    <li>If your MLCP Owner enables it, the ability to change quantities or auto-renew</li>
+</ul>
+
+<a class="btn btn-primary" asp-controller="Onboarding" asp-action="Index">Back to connection status</a>

@@ -1,0 +1,41 @@
+@{
+    ViewData["Title"] = "Unlock Azure costs";
+}
+
+<h1>Unlock Azure costs</h1>
+
+<p class="lead"><strong>Who can do this:</strong> someone with <strong>Owner</strong> or
+<strong>User Access Administrator</strong> on your Azure subscriptions or management group.</p>
+
+<div class="alert alert-info" role="note">
+    <strong>Why consent alone is not enough.</strong> Azure uses its own permission system.
+    Accepting the app permissions gives us no access to Azure cost data at all. You need to grant
+    our application the <strong>Cost Management Reader</strong> role &mdash; read-only &mdash; on
+    the scope you want visible.
+</div>
+
+<h2 class="h5">Fastest path: all subscriptions</h2>
+<ol>
+    <li>Deploy <code>infra/customer-rbac.bicep</code> at management-group scope.</li>
+    <li>Choose the <strong>Tenant Root Group</strong> as the scope.</li>
+    <li>Confirm. One assignment covers every current and future subscription.</li>
+</ol>
+
+<h2 class="h5">Manual path: specific subscriptions</h2>
+<ol>
+    <li>Azure portal &rarr; <strong>Subscriptions</strong> &rarr; select one &rarr;
+        <strong>Access control (IAM)</strong>.</li>
+    <li><strong>Add &rarr; Add role assignment &rarr; Cost Management Reader</strong>.</li>
+    <li>Assign access to <strong>User, group, or service principal</strong> &rarr; search
+        <strong>MLCP</strong> &rarr; Select &rarr; Review + assign.</li>
+    <li>Repeat for each subscription.</li>
+</ol>
+
+<p class="text-muted">
+    Cost data may take up to an hour to appear after assignment, because of Microsoft's own
+    propagation delay. If you have an Enterprise Agreement, also ask your Enterprise Administrator
+    to enable <strong>AO view charges</strong> and <strong>DA view charges</strong> in the
+    enrolment settings &mdash; without those, the role alone still returns nothing.
+</p>
+
+<a class="btn btn-primary" asp-controller="Onboarding" asp-action="Index">Back to connection status</a>
