@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.bicep text eol=lf
+*.sln text eol=crlf
+*.png binary
+*.zip binary
