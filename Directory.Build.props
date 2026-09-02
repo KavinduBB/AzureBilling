@@ -1,0 +1,29 @@
+<Project>
+
+  <!--
+    Stack note: docs/CLAUDE.md fixes the stack at .NET 9 / C# 13. This solution targets
+    net8.0 because the .NET 9 SDK is not available on the build machine. See
+    docs/06-decisions/ADR-011-net8-target-framework.md. Raising the target is a
+    single edit here plus a package-version bump in Directory.Packages.props.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Mlcp.UnitTests' Or '$(MSBuildProjectName)' == 'Mlcp.IntegrationTests'">
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+</Project>

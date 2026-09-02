@@ -1,0 +1,33 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+trim_trailing_whitespace = true
+
+[*.{cs,csx}]
+indent_size = 4
+dotnet_sort_system_directives_first = true
+csharp_using_directive_placement = outside_namespace:warning
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_style_var_when_type_is_apparent = true:suggestion
+dotnet_style_readonly_field = true:warning
+dotnet_diagnostic.CA1848.severity = none
+dotnet_diagnostic.CA2007.severity = none
+dotnet_diagnostic.CA1062.severity = none
+dotnet_diagnostic.CA1515.severity = none
+# CA1716: 'Mlcp.Shared' collides with a Visual Basic keyword. The solution layout is fixed
+# by CLAUDE.md and the platform ships no VB consumers, so the rule cannot be actioned.
+dotnet_diagnostic.CA1716.severity = none
+
+[*.{csproj,props,targets,json,yml,yaml,bicep}]
+indent_size = 2
+
+[*.{sln}]
+end_of_line = crlf
+indent_style = tab
+
+[*.md]
+trim_trailing_whitespace = false

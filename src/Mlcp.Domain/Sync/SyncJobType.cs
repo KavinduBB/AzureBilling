@@ -1,0 +1,79 @@
+namespace Mlcp.Domain.Sync;
+
+/// <summary>Every scheduled sync job (docs/03-architecture.md §6.1).</summary>
+public enum SyncJobType
+{
+    Unknown = 0,
+    CapabilityDiscovery = 1,
+    LicenseSkuSync = 2,
+    UserAssignmentSync = 3,
+    UsageReportSync = 4,
+    BillingSubscriptionSync = 5,
+    TransactionSyncUnbilled = 6,
+    TransactionSyncBilled = 7,
+    InvoiceSync = 8,
+    UnitPriceDerivation = 9,
+    AzureCostSummarySync = 10,
+    AzureCostDetailSync = 11,
+    ReservationSync = 12,
+    AdvisorSync = 13,
+    SnapshotJob = 14,
+    AssociatedTenantDiscovery = 15,
+    TenantDeletion = 16,
+}
+
+/// <summary>
+/// How a job's staged rows relate to the live table, which determines what the validation gate
+/// may legitimately assert.
+/// </summary>
+/// <remarks>
+/// CLAUDE.md rule 6 blocks a run whose row count drops by more than half against the last
+/// success. That test is only meaningful for a job that re-fetches the entire set each run. A
+/// delta job stages a page of changes whose size has no relationship to the live row count, so
+/// applying the same test would fail almost every run. The gate reads this mode and applies
+/// the volume checks to <see cref="Full"/> jobs only; see
+/// <c>Mlcp.Domain.Sync.SyncValidationGate</c>.
+/// </remarks>
+public enum SyncLoadMode
+{
+    Unknown = 0,
+
+    /// <summary>The run fetches the complete current set. Row-count checks apply.</summary>
+    Full = 1,
+
+    /// <summary>The run fetches only changes since a cursor. Row-count checks do not apply.</summary>
+    Incremental = 2,
+
+    /// <summary>The run appends immutable facts for a period. Existing rows are never removed.</summary>
+    Append = 3,
+}
+
+public static class SyncJobTypeExtensions
+{
+    private static readonly Dictionary<SyncJobType, SyncLoadMode> LoadModes = new()
+    {
+        [SyncJobType.CapabilityDiscovery] = SyncLoadMode.Full,
+        [SyncJobType.LicenseSkuSync] = SyncLoadMode.Full,
+        [SyncJobType.UserAssignmentSync] = SyncLoadMode.Incremental,
+        [SyncJobType.UsageReportSync] = SyncLoadMode.Append,
+        [SyncJobType.BillingSubscriptionSync] = SyncLoadMode.Full,
+        [SyncJobType.TransactionSyncUnbilled] = SyncLoadMode.Full,
+        [SyncJobType.TransactionSyncBilled] = SyncLoadMode.Append,
+        [SyncJobType.InvoiceSync] = SyncLoadMode.Full,
+        [SyncJobType.UnitPriceDerivation] = SyncLoadMode.Full,
+        [SyncJobType.AzureCostSummarySync] = SyncLoadMode.Append,
+        [SyncJobType.AzureCostDetailSync] = SyncLoadMode.Append,
+        [SyncJobType.ReservationSync] = SyncLoadMode.Full,
+        [SyncJobType.AdvisorSync] = SyncLoadMode.Full,
+        [SyncJobType.SnapshotJob] = SyncLoadMode.Append,
+        [SyncJobType.AssociatedTenantDiscovery] = SyncLoadMode.Full,
+        [SyncJobType.TenantDeletion] = SyncLoadMode.Full,
+    };
+
+    /// <summary>
+    /// The load mode for a job. Unmapped jobs fall back to <see cref="SyncLoadMode.Full"/>: the
+    /// strictest gate is the safe default when a new job type has not declared its mode.
+    /// </summary>
+    public static SyncLoadMode LoadMode(this SyncJobType jobType)
+        => LoadModes.TryGetValue(jobType, out var mode) ? mode : SyncLoadMode.Full;
+}

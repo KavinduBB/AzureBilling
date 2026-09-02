@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Mlcp.Application\Mlcp.Application.csproj" />
+    <ProjectReference Include="..\Mlcp.Domain\Mlcp.Domain.csproj" />
+    <ProjectReference Include="..\Mlcp.Shared\Mlcp.Shared.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Graph" />
+    <PackageReference Include="Azure.Identity" />
+  </ItemGroup>
+
+</Project>
