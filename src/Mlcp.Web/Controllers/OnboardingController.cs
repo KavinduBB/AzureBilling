@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Caching.Memory;
 using Mlcp.Application.Onboarding;
 using Mlcp.Domain.Tenancy;
 using Mlcp.Web.Infrastructure;
@@ -8,44 +10,56 @@ using Mlcp.Web.Models;
 namespace Mlcp.Web.Controllers;
 
 /// <summary>
-/// The onboarding state machine's web surface (docs/03-architecture.md §3).
+/// The onboarding state machine's web surface (docs/03-architecture.md §3, ADR-018).
 /// </summary>
 /// <remarks>
-/// Thin by policy: every decision lives in <see cref="OnboardingService"/> and
-/// <see cref="CapabilityDiscoveryService"/>. What this type owns is the HTTP-specific work —
-/// reading claims, validating the consent state, and choosing a view.
+/// Thin by policy: decisions live in <see cref="OnboardingService"/>. What this type owns is the
+/// HTTP-specific work — reading the live claims, issuing and checking the consent state,
+/// step-up authentication, and choosing a view. No Microsoft call is made here except through
+/// <see cref="OnboardingService.CompleteAdminConsentAsync"/>'s single verification.
 /// </remarks>
 [Authorize]
 [Route("onboarding")]
 public sealed class OnboardingController : Controller
 {
+    private const string MessageKey = "OnboardingMessage";
+
     private readonly OnboardingService _onboarding;
-    private readonly CapabilityDiscoveryService _discovery;
     private readonly ITenantOnboardingStore _store;
     private readonly IOnboardingRepository _repository;
-    private readonly AdminConsentUrlBuilder _consentUrlBuilder;
-    private readonly DeploymentOptions _deployment;
+    private readonly AdminConsentUrlBuilder _consentUrls;
+    private readonly ConsentStateProtector _consentState;
+    private readonly RegionPicker _regions;
+    private readonly MlcpWebOptions _options;
+    private readonly IMemoryCache _cache;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<OnboardingController> _logger;
 
     public OnboardingController(
         OnboardingService onboarding,
-        CapabilityDiscoveryService discovery,
         ITenantOnboardingStore store,
         IOnboardingRepository repository,
-        AdminConsentUrlBuilder consentUrlBuilder,
-        DeploymentOptions deployment,
+        AdminConsentUrlBuilder consentUrls,
+        ConsentStateProtector consentState,
+        RegionPicker regions,
+        MlcpWebOptions options,
+        IMemoryCache cache,
+        TimeProvider timeProvider,
         ILogger<OnboardingController> logger)
     {
         _onboarding = onboarding;
-        _discovery = discovery;
         _store = store;
         _repository = repository;
-        _consentUrlBuilder = consentUrlBuilder;
-        _deployment = deployment;
+        _consentUrls = consentUrls;
+        _consentState = consentState;
+        _regions = regions;
+        _options = options;
+        _cache = cache;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
-    /// <summary>The connection status page: either "not connected" or the unlock checklist.</summary>
+    /// <summary>The connection status page, chosen by the tenant's state.</summary>
     [HttpGet("")]
     public async Task<IActionResult> Index(CancellationToken cancellationToken)
     {
@@ -54,42 +68,98 @@ public sealed class OnboardingController : Controller
             return Challenge();
         }
 
-        var state = await _onboarding.RecordSignInAsync(user, _deployment.Region, cancellationToken);
+        var state = await _onboarding.RecordSignInAsync(user, _regions.CurrentRegion, cancellationToken);
+        var tenant = state.Tenant!;
 
-        if (state.Tenant is null || state.Tenant.ConsentGrantedUtc is null)
+        switch (tenant.Status)
         {
-            return View("NotConnected", new NotConnectedViewModel(
-                user.DisplayName,
-                state.PendingRequest?.SentToEmail,
-                state.PendingRequest?.ExpiresUtc));
+            case TenantStatus.GracePeriod:
+                return View("Disconnected", new DisconnectedViewModel(tenant.DeleteScheduledUtc, user.IsDirectoryAdmin));
+
+            case TenantStatus.ConsentPendingVerification:
+                return View("FinishingConnection", new FinishingConnectionViewModel(user.IsDirectoryAdmin, _regions.Current()));
+
+            case TenantStatus.NeedsReconsent:
+                return View("NeedsReconsent", new NeedsReconsentViewModel(
+                    tenant.TenantId,
+                    DescribeReconsentReason(tenant.NeedsReconsentReason),
+                    tenant.NeedsReconsentSinceUtc,
+                    user.IsDirectoryAdmin,
+                    _regions.Current()));
+
+            case TenantStatus.Provisioning or TenantStatus.Active:
+                var profile = await _store.FindCapabilityProfileAsync(user.TenantId, cancellationToken);
+
+                if (profile is null)
+                {
+                    // Consent is verified but discovery has not run yet. Saying so is more honest
+                    // than rendering a checklist of unknowns, which would read as failures.
+                    return View("Provisioning");
+                }
+
+                return View("Checklist", new ChecklistViewModel(
+                    OnboardingChecklist.Build(tenant, profile),
+                    user.IsDirectoryAdmin,
+                    _consentUrls.HasUsageInsights));
+
+            default:
+                return View("NotConnected", new NotConnectedViewModel(
+                    user.DisplayName,
+                    user.IsDirectoryAdmin,
+                    _regions.Current(),
+                    state.PendingRequest?.SentToEmail,
+                    state.PendingRequest?.ExpiresUtc));
         }
-
-        var profile = await _store.FindCapabilityProfileAsync(user.TenantId, cancellationToken);
-
-        if (profile is null)
-        {
-            // Consent is recorded but discovery has not run yet. Saying so is more honest than
-            // rendering a checklist of unknowns, which would read as a list of failures.
-            return View("Provisioning");
-        }
-
-        return View("Checklist", OnboardingChecklist.Build(state.Tenant, profile));
     }
 
-    /// <summary>Sends an administrator to the Entra tenant-wide consent screen.</summary>
+    /// <summary>
+    /// Sends a directory administrator to the Entra tenant-wide consent screen, after they have
+    /// confirmed the region their organisation's data will live in.
+    /// </summary>
     [HttpPost("connect")]
-    [ValidateAntiForgeryToken]
-    public IActionResult Connect()
+    [EnableRateLimiting(RateLimitPolicies.Connect)]
+    public async Task<IActionResult> Connect([FromForm] string? confirmRegion, CancellationToken cancellationToken)
     {
         if (!User.TryGetSignedInUser(out var user))
         {
             return Challenge();
         }
 
-        var redirectUri = Url.Action(nameof(ConsentCallback), "Onboarding", values: null, protocol: Request.Scheme)
-            ?? throw new InvalidOperationException("Could not build the consent callback URL.");
+        if (!user.IsDirectoryAdmin)
+        {
+            // Only admins can start admin consent; everyone else gets "ask my admin" (ADR-018).
+            return Forbid();
+        }
 
-        return Redirect(_consentUrlBuilder.Build(user.TenantId, redirectUri));
+        if (!string.Equals(confirmRegion, _regions.CurrentRegion, StringComparison.OrdinalIgnoreCase))
+        {
+            TempData[MessageKey] = "Please confirm where your organisation's data will be stored before connecting.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        var correlationId = HttpContext.TraceIdentifier is { Length: > 0 and <= 64 } trace
+            ? trace
+            : Guid.NewGuid().ToString("N");
+
+        var outcome = await _onboarding.BeginConnectAsync(user, _regions.CurrentRegion, correlationId, cancellationToken);
+        RegionRoutingMiddleware.Invalidate(_cache, user.TenantId);
+
+        switch (outcome.Decision)
+        {
+            case ConnectDecision.NotDirectoryAdmin:
+                return Forbid();
+
+            case ConnectDecision.Disconnected:
+                return RedirectToAction(nameof(Index));
+
+            case ConnectDecision.RegisteredElsewhere:
+                await RegionRoutingMiddleware.RedirectToRegionAsync(HttpContext, _options, outcome.Region, _logger);
+                return new EmptyResult();
+        }
+
+        var state = await _consentState.CreateAsync(user, outcome.Region, correlationId, ConsentFlow.Core, cancellationToken);
+
+        return Redirect(_consentUrls.Build(user.TenantId, CallbackUrl(nameof(ConsentCallback)), state));
     }
 
     /// <summary>
@@ -97,23 +167,22 @@ public sealed class OnboardingController : Controller
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Microsoft includes a <c>tenant</c> parameter here. It is deliberately ignored: the
-    /// tenant marked as consented comes from the returning administrator's own validated token.
-    /// Trusting the query string would let anyone mark an arbitrary tenant connected by
-    /// crafting a URL.
+    /// Nothing in the query string is trusted. The state must be one this deployment issued to
+    /// this person in this tenant within ten minutes, and it works once. Microsoft's
+    /// <c>tenant</c> parameter must match the caller's <c>tid</c>; the tenant acted on is still
+    /// the token's. Consent is then verified with an app-only call before anything is recorded
+    /// as granted.
     /// </para>
     /// <para>
-    /// The protected <c>state</c> is checked as a correlation and replay guard. A mismatch is
-    /// logged rather than silently accepted: it means a stale link, or an attempt to splice one
-    /// tenant's consent onto another's session.
+    /// Error text from the query string is never shown; each failure maps to a fixed message.
     /// </para>
     /// </remarks>
     [HttpGet("consent-callback")]
     public async Task<IActionResult> ConsentCallback(
         [FromQuery(Name = "admin_consent")] string? adminConsent,
+        [FromQuery(Name = "tenant")] string? consentTenant,
         [FromQuery] string? state,
         [FromQuery] string? error,
-        [FromQuery(Name = "error_description")] string? errorDescription,
         CancellationToken cancellationToken)
     {
         if (!User.TryGetSignedInUser(out var admin))
@@ -121,79 +190,131 @@ public sealed class OnboardingController : Controller
             return Challenge();
         }
 
-        if (!string.IsNullOrEmpty(error))
+        var check = await ValidateCallbackAsync(admin, adminConsent, consentTenant, state, error, ConsentFlow.Core, cancellationToken);
+
+        if (check.Failure is { } failure)
         {
-            _logger.LogWarning("Admin consent was declined or failed: {Error}.", error);
-            return View("ConsentDeclined", new ConsentDeclinedViewModel(error, errorDescription));
+            return View("ConsentFailed", new ConsentFailedViewModel(failure));
         }
 
-        if (!string.Equals(adminConsent, "True", StringComparison.OrdinalIgnoreCase))
+        var consentState = check.State!;
+        var result = await _onboarding.CompleteAdminConsentAsync(admin, consentState.Region, consentState.CorrelationId, cancellationToken);
+
+        return result switch
         {
-            return View("ConsentDeclined", new ConsentDeclinedViewModel(
-                "no_consent",
-                "Consent was not granted, so nothing has changed."));
-        }
-
-        if (!_consentUrlBuilder.TryUnprotectState(state, out var initiatingTenantId))
-        {
-            _logger.LogWarning("Admin consent callback carried an invalid or expired state; refusing.");
-
-            return View("ConsentDeclined", new ConsentDeclinedViewModel(
-                "invalid_state",
-                "This consent link has expired. Please start again from the connect page."));
-        }
-
-        if (initiatingTenantId != admin.TenantId)
-        {
-            _logger.LogWarning(
-                "Consent callback state names tenant {StateTenantId} but the administrator is in {AdminTenantId}. Refusing.",
-                initiatingTenantId,
-                admin.TenantId);
-
-            return View("ConsentDeclined", new ConsentDeclinedViewModel(
-                "tenant_mismatch",
-                "This consent link was started from a different organisation."));
-        }
-
-        await _onboarding.CompleteAdminConsentAsync(admin, _deployment.Region, cancellationToken);
-
-        // Discovery is one of the few places a request may call Microsoft (CLAUDE.md rule 5),
-        // and it is what turns a consent into a usable connection. Running it here means the
-        // admin sees a real result rather than a page telling them to come back later.
-        await _discovery.DiscoverAsync(admin.TenantId, cancellationToken);
-
-        return RedirectToAction(nameof(Index));
+            ConsentCallbackResult.Verified => RedirectToAction(nameof(Index)),
+            ConsentCallbackResult.PendingVerification =>
+                View("FinishingConnection", new FinishingConnectionViewModel(admin.IsDirectoryAdmin, _regions.Current())),
+            ConsentCallbackResult.NotGranted => View("ConsentFailed", new ConsentFailedViewModel(ConsentFailureReason.NotGranted)),
+            ConsentCallbackResult.CouldNotConfirm =>
+                View("ConsentFailed", new ConsentFailedViewModel(ConsentFailureReason.CouldNotConfirm)),
+            ConsentCallbackResult.NotDirectoryAdmin =>
+                View("ConsentFailed", new ConsentFailedViewModel(ConsentFailureReason.NotAdministrator)),
+            _ => RedirectToAction(nameof(Index)),
+        };
     }
 
-    /// <summary>Emails an administrator asking them to connect the tenant.</summary>
-    [HttpPost("request-consent")]
-    [ValidateAntiForgeryToken]
-    public async Task<IActionResult> RequestConsent(
-        [FromForm] string adminEmail,
-        CancellationToken cancellationToken)
+    /// <summary>Sends a directory administrator to the separate Usage Insights consent (Guide D, ADR-015).</summary>
+    [HttpPost("connect-usage-insights")]
+    [EnableRateLimiting(RateLimitPolicies.Connect)]
+    public async Task<IActionResult> ConnectUsageInsights(CancellationToken cancellationToken)
     {
         if (!User.TryGetSignedInUser(out var user))
         {
             return Challenge();
         }
 
-        if (string.IsNullOrWhiteSpace(adminEmail) || !adminEmail.Contains('@', StringComparison.Ordinal))
+        if (!user.IsDirectoryAdmin)
         {
-            ModelState.AddModelError(nameof(adminEmail), "Enter your administrator's email address.");
-            return View("NotConnected", new NotConnectedViewModel(user.DisplayName, null, null));
+            return Forbid();
         }
 
-        var request = await _onboarding.RequestAdminConsentAsync(
+        if (!_consentUrls.HasUsageInsights)
+        {
+            return NotFound();
+        }
+
+        var tenant = await _repository.FindTenantAsync(user.TenantId, cancellationToken);
+
+        if (tenant?.Status is not (TenantStatus.Active or TenantStatus.Provisioning))
+        {
+            TempData[MessageKey] = "Connect your organisation first; usage insights build on that connection.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        var state = await _consentState.CreateAsync(
             user,
-            adminEmail,
-            pending => Url.Action(
-                nameof(ConsentLanding),
-                "Onboarding",
-                new { token = pending.Token },
-                Request.Scheme)!,
+            tenant.Region,
+            Guid.NewGuid().ToString("N"),
+            ConsentFlow.UsageInsights,
             cancellationToken);
 
-        TempData["ConsentRequestSentTo"] = request.SentToEmail;
+        return Redirect(_consentUrls.BuildUsageInsights(user.TenantId, CallbackUrl(nameof(UsageInsightsCallback)), state));
+    }
+
+    /// <summary>
+    /// Where Entra returns after the Usage Insights consent. Nothing is concluded here: the
+    /// capability is re-probed by queued discovery with the Usage Insights token.
+    /// </summary>
+    [HttpGet("usage-insights-callback")]
+    public async Task<IActionResult> UsageInsightsCallback(
+        [FromQuery(Name = "admin_consent")] string? adminConsent,
+        [FromQuery(Name = "tenant")] string? consentTenant,
+        [FromQuery] string? state,
+        [FromQuery] string? error,
+        CancellationToken cancellationToken)
+    {
+        if (!User.TryGetSignedInUser(out var admin))
+        {
+            return Challenge();
+        }
+
+        var check = await ValidateCallbackAsync(
+            admin,
+            adminConsent,
+            consentTenant,
+            state,
+            error,
+            ConsentFlow.UsageInsights,
+            cancellationToken);
+
+        if (check.Failure is { } failure)
+        {
+            return View("ConsentFailed", new ConsentFailedViewModel(failure));
+        }
+
+        await _onboarding.RecordUsageInsightsConsentAsync(admin, check.State!.CorrelationId, cancellationToken);
+
+        TempData[MessageKey] = "Thanks. We are checking the usage insights permission now; this page updates within a few minutes.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>Emails an administrator asking them to connect the tenant.</summary>
+    [HttpPost("request-consent")]
+    [EnableRateLimiting(RateLimitPolicies.ConsentRequest)]
+    public async Task<IActionResult> RequestConsent([FromForm] string? adminEmail, CancellationToken cancellationToken)
+    {
+        if (!User.TryGetSignedInUser(out var user))
+        {
+            return Challenge();
+        }
+
+        var publicBase = PublicBaseUrl();
+
+        var outcome = await _onboarding.RequestAdminConsentAsync(
+            user,
+            adminEmail,
+            pending => new Uri(publicBase, "onboarding/consent/" + Uri.EscapeDataString(pending.Token)).AbsoluteUri,
+            cancellationToken);
+
+        if (outcome.IsSent)
+        {
+            TempData["ConsentRequestSentTo"] = outcome.Request!.SentToEmail;
+        }
+        else
+        {
+            TempData[MessageKey] = DescribeRefusal(outcome);
+        }
 
         return RedirectToAction(nameof(Index));
     }
@@ -203,13 +324,13 @@ public sealed class OnboardingController : Controller
     /// </summary>
     /// <remarks>
     /// The token identifies which request this is; it grants nothing. The administrator still
-    /// signs in and completes the Entra consent screen before any permission exists, so a
-    /// leaked link discloses only that someone asked for a connection.
+    /// signs in and completes the Entra consent screen before any permission exists. The token
+    /// segment is kept out of request logs (see the request-logging configuration).
     /// </remarks>
     [HttpGet("consent/{token}")]
     public async Task<IActionResult> ConsentLanding(string token, CancellationToken cancellationToken)
     {
-        if (!User.TryGetSignedInUser(out _))
+        if (!User.TryGetSignedInUser(out var user))
         {
             return Challenge();
         }
@@ -221,29 +342,218 @@ public sealed class OnboardingController : Controller
             return View("ConsentLinkExpired");
         }
 
-        return View("ConsentLanding", new ConsentLandingViewModel(request.RequestedByUpn, request.ExpiresUtc));
+        return View("ConsentLanding", new ConsentLandingViewModel(
+            request.RequestedByUpn,
+            request.ExpiresUtc,
+            user.IsDirectoryAdmin,
+            _regions.Current()));
     }
 
-    /// <summary>Begins the 30-day deletion clock for this tenant.</summary>
-    [HttpPost("disconnect")]
-    [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Disconnect(CancellationToken cancellationToken)
+    /// <summary>The disconnect confirmation page. Admin-only, after a fresh sign-in.</summary>
+    [HttpGet("disconnect")]
+    public async Task<IActionResult> ConfirmDisconnect(CancellationToken cancellationToken)
     {
         if (!User.TryGetSignedInUser(out var user))
         {
             return Challenge();
         }
 
-        var appUser = await _repository.FindAppUserAsync(user.TenantId, user.ObjectId, cancellationToken);
-
-        // Disconnecting destroys the whole organisation's data. Only an Owner may start it.
-        if (appUser is null || appUser.Role != AppRole.Owner)
+        if (!user.IsDirectoryAdmin)
         {
             return Forbid();
         }
 
+        if (!RecentAuthentication.IsRecent(User, _timeProvider.GetUtcNow()))
+        {
+            return Challenge(RecentAuthentication.ChallengeProperties(Url.Action(nameof(ConfirmDisconnect))!));
+        }
+
+        var tenant = await _repository.FindTenantAsync(user.TenantId, cancellationToken);
+
+        if (tenant is null || tenant.Status is TenantStatus.GracePeriod or TenantStatus.Deleted)
+        {
+            return RedirectToAction(nameof(Index));
+        }
+
+        return View("DisconnectConfirm", new DisconnectConfirmViewModel(
+            tenant.DisplayName,
+            (int)OnboardingService.DeletionGracePeriod.TotalDays));
+    }
+
+    /// <summary>
+    /// Begins the 30-day deletion clock for this tenant. Requires a live admin claim and a
+    /// re-authentication within 15 minutes (ADR-018).
+    /// </summary>
+    [HttpPost("disconnect")]
+    public async Task<IActionResult> Disconnect([FromForm] bool confirmed, CancellationToken cancellationToken)
+    {
+        if (!User.TryGetSignedInUser(out var user))
+        {
+            return Challenge();
+        }
+
+        if (!user.IsDirectoryAdmin)
+        {
+            return Forbid();
+        }
+
+        if (!RecentAuthentication.IsRecent(User, _timeProvider.GetUtcNow()))
+        {
+            return Challenge(RecentAuthentication.ChallengeProperties(Url.Action(nameof(ConfirmDisconnect))!));
+        }
+
+        if (!confirmed)
+        {
+            return RedirectToAction(nameof(ConfirmDisconnect));
+        }
+
         var tenant = await _onboarding.DisconnectAsync(user, cancellationToken);
 
-        return View("Disconnected", new DisconnectedViewModel(tenant.DeleteScheduledUtc));
+        return View("Disconnected", new DisconnectedViewModel(tenant.DeleteScheduledUtc, user.IsDirectoryAdmin));
     }
+
+    /// <summary>
+    /// Reverses a disconnect during the grace period — the only way a scheduled deletion is
+    /// cancelled. Same gates as disconnect.
+    /// </summary>
+    [HttpPost("cancel-disconnect")]
+    public async Task<IActionResult> CancelDisconnect(CancellationToken cancellationToken)
+    {
+        if (!User.TryGetSignedInUser(out var user))
+        {
+            return Challenge();
+        }
+
+        if (!user.IsDirectoryAdmin)
+        {
+            return Forbid();
+        }
+
+        if (!RecentAuthentication.IsRecent(User, _timeProvider.GetUtcNow()))
+        {
+            TempData[MessageKey] = "You signed in again. Select \"Keep my organisation connected\" once more to confirm.";
+            return Challenge(RecentAuthentication.ChallengeProperties(Url.Action(nameof(Index))!));
+        }
+
+        await _onboarding.CancelDisconnectAsync(user, cancellationToken);
+
+        TempData[MessageKey] = "The disconnect was cancelled. Your data will not be deleted.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>The Owner's "Check again" on a tenant that needs re-consent (ADR-016 rule 5).</summary>
+    [HttpPost("check-again")]
+    [EnableRateLimiting(RateLimitPolicies.CheckAgain)]
+    public async Task<IActionResult> CheckAgain([FromForm] CheckAgainForm form, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(form);
+
+        if (!User.TryGetSignedInUser(out var user))
+        {
+            return Challenge();
+        }
+
+        if (!user.IsDirectoryAdmin)
+        {
+            return Forbid();
+        }
+
+        var queued = await _onboarding.RequestReconsentProbeAsync(user, cancellationToken);
+
+        TempData[MessageKey] = queued
+            ? "We are checking the connection again. This page updates within a few minutes."
+            : "Your organisation's connection does not need checking right now.";
+
+        return RedirectToAction(nameof(Index));
+    }
+
+    private async Task<(ConsentFailureReason? Failure, ConsentState? State)> ValidateCallbackAsync(
+        SignedInUser admin,
+        string? adminConsent,
+        string? consentTenant,
+        string? state,
+        string? error,
+        ConsentFlow flow,
+        CancellationToken cancellationToken)
+    {
+        // The nonce is consumed whatever happens next, so a returned state never works twice.
+        var validation = await _consentState.ConsumeAsync(state, admin, flow, cancellationToken);
+
+        if (!string.IsNullOrEmpty(error))
+        {
+            _logger.LogWarning("Admin consent ({Flow}) returned an error for tenant {TenantId}.", flow, admin.TenantId);
+
+            return (
+                string.Equals(error, "access_denied", StringComparison.Ordinal)
+                    ? ConsentFailureReason.Declined
+                    : ConsentFailureReason.EntraError,
+                null);
+        }
+
+        if (!validation.IsValid)
+        {
+            _logger.LogWarning(
+                "Admin consent callback ({Flow}) for tenant {TenantId} refused: state {StateStatus}.",
+                flow,
+                admin.TenantId,
+                validation.Status);
+
+            return (
+                validation.Status == ConsentStateStatus.WrongTenant
+                    ? ConsentFailureReason.TenantMismatch
+                    : ConsentFailureReason.InvalidOrExpired,
+                null);
+        }
+
+        if (!string.Equals(adminConsent, "True", StringComparison.OrdinalIgnoreCase))
+        {
+            return (ConsentFailureReason.Declined, null);
+        }
+
+        if (!Guid.TryParse(consentTenant, out var reportedTenant) || reportedTenant != admin.TenantId)
+        {
+            _logger.LogWarning(
+                "Admin consent callback ({Flow}) for tenant {TenantId} named a different or missing tenant; refusing.",
+                flow,
+                admin.TenantId);
+
+            return (ConsentFailureReason.TenantMismatch, null);
+        }
+
+        if (!admin.IsDirectoryAdmin)
+        {
+            return (ConsentFailureReason.NotAdministrator, null);
+        }
+
+        return (null, validation.State);
+    }
+
+    private string CallbackUrl(string action)
+        => Url.Action(action, "Onboarding", values: null, protocol: Request.Scheme)
+            ?? throw new InvalidOperationException("Could not build the consent callback URL.");
+
+    /// <summary>
+    /// The origin for links that leave the request. Configured in every deployed environment
+    /// (enforced at startup); Development falls back to the request's own origin.
+    /// </summary>
+    private Uri PublicBaseUrl()
+        => _options.PublicBaseUrl ?? new Uri($"{Request.Scheme}://{Request.Host}/");
+
+    private static string DescribeRefusal(ConsentRequestOutcome outcome) => outcome.Refusal switch
+    {
+        ConsentRequestRefusal.InvalidAddress => "Enter a single work email address for your administrator.",
+        ConsentRequestRefusal.DomainNotAllowed =>
+            "The address must belong to your organisation. Use your administrator's work address in one of your organisation's domains.",
+        ConsentRequestRefusal.Cooldown => "A request was sent a few minutes ago. Please wait 15 minutes before sending another.",
+        ConsentRequestRefusal.UserDailyLimit => "You have sent the maximum number of requests for today. Please try again tomorrow.",
+        ConsentRequestRefusal.TenantDailyLimit =>
+            "Your organisation has sent the maximum number of requests for today. Please try again tomorrow.",
+        ConsentRequestRefusal.AlreadyConnected => "Your organisation is already connected.",
+        _ => "The request could not be sent.",
+    };
+
+    private static string DescribeReconsentReason(string? reason)
+        => reason is not null && reason.StartsWith("FloorPermissionRemoved", StringComparison.OrdinalIgnoreCase)
+            ? "A permission MLCP needs to read your licences was removed from the MLCP application in your organisation."
+            : "MLCP's access to your organisation was removed or disabled, so synchronisation has stopped.";
 }

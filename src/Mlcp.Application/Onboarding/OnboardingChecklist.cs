@@ -47,7 +47,22 @@ public sealed record OnboardingChecklist(
     bool IsPartnerManaged,
     IReadOnlyList<ChecklistItem> Items)
 {
+    /// <summary>The Guide C prompt for a tenant whose agreement cannot be seen yet (ADR-020).</summary>
+    public const string UndeterminedBillingCopy =
+        "We can't see how your organisation buys Microsoft licences yet. If you have a Microsoft Customer "
+        + "Agreement, grant billing read access to unlock prices and invoices. If you bought online before "
+        + "2023, pricing may not be available yet — you can enter seat prices meanwhile.";
+
     public int CompletedCount => Items.Count(i => i.IsComplete);
+
+    /// <summary>
+    /// True when entering seat prices by hand is offered: every tenant except an MCA tenant whose
+    /// billing role is already granted, because that tenant gets real prices (ADR-020, ADR-006).
+    /// </summary>
+    public bool OffersManualPricing =>
+        !(AgreementType == AgreementType.Mca && Items.Any(i => i.Key == BillingRoleKey && i.IsComplete));
+
+    private const string BillingRoleKey = "billing-role";
 
     /// <summary>Items still worth prompting the customer about.</summary>
     public IReadOnlyList<ChecklistItem> OutstandingActions =>
@@ -81,12 +96,14 @@ public sealed record OnboardingChecklist(
                     "Unlock Azure costs",
                     "Azure spend by subscription, resource group, resource and tag, with forecast."),
 
-                Item(
-                    profile,
-                    Capability.BillingTransactions,
-                    "billing-role",
-                    "Unlock prices and invoices",
-                    "What you actually pay per seat, monthly invoices, auto-renew and term dates."),
+                BillingItem(
+                    tenant,
+                    Item(
+                        profile,
+                        Capability.BillingTransactions,
+                        BillingRoleKey,
+                        "Unlock prices and invoices",
+                        "What you actually pay per seat, monthly invoices, auto-renew and term dates.")),
 
                 Item(
                     profile,
@@ -113,6 +130,32 @@ public sealed record OnboardingChecklist(
             IsComplete: unavailable is null,
             unavailable,
             IsActionable: unavailable is null || IsActionable(unavailable.Reason));
+    }
+
+    /// <summary>
+    /// For an <see cref="AgreementType.Undetermined"/> tenant, Guide C is the one step that can
+    /// reveal the agreement, so it is always offered, whatever the probe concluded (ADR-020).
+    /// A tenant that is actually MOSA or CSP-managed is classified on positive evidence and never
+    /// reaches this branch.
+    /// </summary>
+    private static ChecklistItem BillingItem(Tenant tenant, ChecklistItem item)
+    {
+        if (item.IsComplete || tenant.AgreementTypePrimary != AgreementType.Undetermined)
+        {
+            return item;
+        }
+
+        var reason = item.Unavailable?.Reason ?? CapabilityUnavailableReason.BillingRoleMissing;
+
+        return item with
+        {
+            Unavailable = new CapabilityUnavailable(
+                Capability.BillingTransactions,
+                reason,
+                RemediationGuide.BillingRole,
+                UndeterminedBillingCopy),
+            IsActionable = true,
+        };
     }
 
     /// <summary>

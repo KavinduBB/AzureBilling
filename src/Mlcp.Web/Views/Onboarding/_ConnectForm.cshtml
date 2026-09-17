@@ -1,0 +1,30 @@
+@model Mlcp.Web.Models.RegionChoiceViewModel
+@* The admin confirms the region as part of connecting (ADR-021). The confirmation is a required
+   checkbox whose value is the region code; the server refuses a connect without it. *@
+
+<form asp-controller="Onboarding" asp-action="Connect" method="post" class="mt-3">
+    <div class="alert alert-light border" role="note">
+        <strong>Your organisation's data will be stored in @Model.Name.</strong>
+        It stays there; moving it later needs our support team and is never automatic.
+        @if (Model.Alternatives.Count > 0)
+        {
+            <span>
+                Need a different region?
+                @foreach (var alternative in Model.Alternatives)
+                {
+                    <a href="@alternative.Url">Connect in @alternative.Name</a>
+                }
+            </span>
+        }
+    </div>
+
+    <div class="form-check mb-3">
+        <input class="form-check-input" type="checkbox" id="confirmRegion" name="confirmRegion"
+               value="@Model.Code" required />
+        <label class="form-check-label" for="confirmRegion">
+            I confirm my organisation's data will be stored in @Model.Name.
+        </label>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Review permissions and connect</button>
+</form>

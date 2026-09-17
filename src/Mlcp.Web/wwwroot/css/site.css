@@ -20,3 +20,17 @@ html {
 body {
   margin-bottom: 60px;
 }
+
+/* ADR-025: the static preview on the NotConnected page. Muted so it never reads as live data. */
+.preview-frame {
+  border: 1px dashed #adb5bd;
+  border-radius: 0.5rem;
+  background: repeating-linear-gradient(-45deg, #f8f9fa, #f8f9fa 12px, #f1f3f5 12px, #f1f3f5 24px);
+}
+
+.preview-tile {
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 0.375rem;
+  padding: 0.75rem 1rem;
+}

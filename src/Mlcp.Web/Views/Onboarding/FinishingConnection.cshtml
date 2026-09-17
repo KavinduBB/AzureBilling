@@ -1,0 +1,31 @@
+@model Mlcp.Web.Models.FinishingConnectionViewModel
+@{
+    ViewData["Title"] = "Finishing the connection";
+}
+
+<h1>Finishing the connection</h1>
+
+<p class="lead">
+    Thanks — your administrator has accepted. Microsoft takes a few minutes to make the new
+    permission available everywhere, so we are confirming it before we start reading anything.
+</p>
+
+<partial name="_Message" />
+
+<p>This usually completes within five minutes. You can leave this page and come back.</p>
+
+<p>
+    <a class="btn btn-outline-primary" asp-action="Index">Refresh status</a>
+</p>
+
+@if (Model.IsDirectoryAdmin)
+{
+    <details class="mt-4">
+        <summary>Still waiting after 20 minutes?</summary>
+        <p class="mt-2 text-muted">
+            The consent may not have been saved. Connecting again is safe; it does not create a
+            second connection.
+        </p>
+        <partial name="_ConnectForm" model="Model.Region" />
+    </details>
+}

@@ -25,6 +25,8 @@
     <ProjectReference Include="..\..\src\Mlcp.Application\Mlcp.Application.csproj" />
     <ProjectReference Include="..\..\src\Mlcp.Persistence\Mlcp.Persistence.csproj" />
     <ProjectReference Include="..\..\src\Mlcp.Sync\Mlcp.Sync.csproj" />
+    <ProjectReference Include="..\..\src\Mlcp.Web\Mlcp.Web.csproj" />
+    <ProjectReference Include="..\..\src\Mlcp.Integration.Azure\Mlcp.Integration.Azure.csproj" />
   </ItemGroup>
 
   <ItemGroup>

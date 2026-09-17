@@ -1,8 +1,9 @@
 @using Mlcp.Domain.Capabilities
 @using Mlcp.Domain.Tenancy
-@model Mlcp.Application.Onboarding.OnboardingChecklist
+@model Mlcp.Web.Models.ChecklistViewModel
 @{
     ViewData["Title"] = "Connection status";
+    var checklist = Model.Checklist;
 
     static string GuideAnchor(RemediationGuide guide) => guide switch
     {
@@ -33,6 +34,7 @@
         AgreementType.Mpa => "Microsoft Partner Agreement",
         AgreementType.CspManaged => "Managed by a partner",
         AgreementType.NotDiscovered => "Not yet determined",
+        AgreementType.Undetermined => "Agreement not visible yet",
         _ => "Unrecognised",
     };
 }
@@ -40,11 +42,13 @@
 <h1>Connection status</h1>
 
 <p class="lead">
-    @Model.CompletedCount of @Model.Items.Count unlocked &middot;
-    <span class="text-muted">@AgreementLabel(Model.AgreementType)</span>
+    @checklist.CompletedCount of @checklist.Items.Count unlocked &middot;
+    <span class="text-muted">@AgreementLabel(checklist.AgreementType)</span>
 </p>
 
-@if (Model.IsPartnerManaged)
+<partial name="_Message" />
+
+@if (checklist.IsPartnerManaged)
 {
     <div class="alert alert-secondary" role="note">
         Your Microsoft licences are sold to you by a partner. Microsoft does not expose what your
@@ -54,7 +58,7 @@
 }
 
 <ol class="list-unstyled">
-@foreach (var item in Model.Items)
+@foreach (var item in checklist.Items)
 {
     var state = item.IsComplete ? "complete" : item.IsActionable ? "actionable" : "explained";
 
@@ -87,18 +91,36 @@
                     }
                 </div>
 
-                @if (!item.IsComplete && item.Guide != RemediationGuide.None)
-                {
-                    <a class="btn @(item.IsActionable ? "btn-primary" : "btn-outline-secondary") text-nowrap"
-                       href="@GuideAnchor(item.Guide)">@GuideCallToAction(item.Guide)</a>
-                }
+                <div class="d-flex flex-column gap-2 align-items-end">
+                    @if (!item.IsComplete && item.Guide != RemediationGuide.None)
+                    {
+                        <a class="btn @(item.IsActionable ? "btn-primary" : "btn-outline-secondary") text-nowrap"
+                           href="@GuideAnchor(item.Guide)">@GuideCallToAction(item.Guide)</a>
+                    }
+
+                    @if (!item.IsComplete && item.Key == "usage-reports" && Model.IsDirectoryAdmin && Model.CanConnectUsageInsights)
+                    {
+                        @* Tier 2 is a separate registration with its own consent (ADR-015). *@
+                        <form asp-action="ConnectUsageInsights" method="post">
+                            <button type="submit" class="btn btn-outline-primary text-nowrap">Connect MLCP Usage Insights</button>
+                        </form>
+                    }
+                </div>
             </div>
         </div>
     </li>
 }
 </ol>
 
-@if (Model.Explanations.Count > 0)
+@if (checklist.OffersManualPricing)
+{
+    <p>
+        Prices not available from Microsoft for your agreement?
+        <a href="/prices">Enter your seat prices yourself</a>.
+    </p>
+}
+
+@if (checklist.Explanations.Count > 0)
 {
     <h2 class="h6 text-muted mt-4">Why some things stay locked</h2>
     <p class="text-muted">
@@ -108,15 +130,14 @@
     </p>
 }
 
-<hr class="mt-5" />
+@if (Model.IsDirectoryAdmin)
+{
+    <hr class="mt-5" />
 
-<h2 class="h6">Disconnect</h2>
-<p class="text-muted">
-    Disconnecting stops all synchronisation immediately and schedules your data for deletion
-    30 days later. You can reverse it at any point during those 30 days.
-</p>
-<form asp-action="Disconnect" method="post"
-      onsubmit="return confirm('Disconnect this organisation and schedule all of its data for deletion in 30 days?');">
-    @Html.AntiForgeryToken()
-    <button type="submit" class="btn btn-outline-danger btn-sm">Disconnect this organisation</button>
-</form>
+    <h2 class="h6">Disconnect</h2>
+    <p class="text-muted">
+        Disconnecting stops all synchronisation immediately and schedules your data for deletion
+        30 days later. An administrator can reverse it at any point during those 30 days.
+    </p>
+    <a class="btn btn-outline-danger btn-sm" asp-action="ConfirmDisconnect">Disconnect this organisation&hellip;</a>
+}

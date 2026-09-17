@@ -1,5 +1,6 @@
 @{
     ViewData["Title"] = "Unlock Azure costs";
+    var deployToAzureUrl = ViewData["DeployToAzureUrl"] as string;
 }
 
 <h1>Unlock Azure costs</h1>
@@ -14,12 +15,40 @@
     the scope you want visible.
 </div>
 
+<h2 class="h5">First, find MLCP's object ID</h2>
+<ol>
+    <li>Entra admin centre &rarr; <strong>Enterprise applications</strong> &rarr;
+        <strong>All applications</strong>.</li>
+    <li>Search for <strong>MLCP</strong> and open it.</li>
+    <li>On <strong>Overview</strong>, copy the <strong>Object ID</strong>. Use the Object ID, not
+        the Application (client) ID: roles are assigned to the application's identity in your
+        organisation.</li>
+</ol>
+
 <h2 class="h5">Fastest path: all subscriptions</h2>
 <ol>
-    <li>Deploy <code>infra/customer-rbac.bicep</code> at management-group scope.</li>
-    <li>Choose the <strong>Tenant Root Group</strong> as the scope.</li>
-    <li>Confirm. One assignment covers every current and future subscription.</li>
+    <li>
+        @if (deployToAzureUrl is not null)
+        {
+            <a class="btn btn-outline-primary btn-sm" href="@deployToAzureUrl" target="_blank" rel="noopener noreferrer">Deploy to Azure</a>
+        }
+        else
+        {
+            <text>Deploy the MLCP role-assignment template (<code>customer-rbac</code>) at management-group scope.</text>
+        }
+    </li>
+    <li>Choose the <strong>Tenant Root Group</strong> as the management group.</li>
+    <li>Paste the Object ID into <strong>Mlcp Principal Id</strong>.</li>
+    <li>Review and create. One assignment covers every current and future subscription.</li>
 </ol>
+
+<div class="alert alert-warning" role="note">
+    <strong>Microsoft Customer Agreement or partner (CSP) customers:</strong> Cost Management does
+    not support management groups for these subscriptions, and purchases such as reservations are
+    only visible with billing access. Also complete
+    <a asp-action="PricesAndInvoices">Unlock prices and invoices</a>. Until then MLCP reads costs
+    subscription by subscription, which is slower and does not include purchases.
+</div>
 
 <h2 class="h5">Manual path: specific subscriptions</h2>
 <ol>

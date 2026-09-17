@@ -1,0 +1,45 @@
+@* ADR-025: a static, clearly labelled preview until the demo dashboard ships in Phase 1 (P1-11).
+   Every figure is sample data; nothing here is read from the visitor's organisation. *@
+<section class="preview mt-5" aria-labelledby="preview-heading">
+    <div class="d-flex align-items-center gap-2 mb-2">
+        <h2 id="preview-heading" class="h5 mb-0">What you will see once connected</h2>
+        <span class="badge text-bg-secondary">Preview &middot; sample data</span>
+    </div>
+    <p class="text-muted small">
+        An illustration with made-up numbers. It is not your organisation's data.
+    </p>
+
+    <div class="preview-frame p-3" aria-hidden="true">
+        <div class="row g-3">
+            <div class="col-sm-4">
+                <div class="preview-tile">
+                    <div class="text-muted small">Licences purchased</div>
+                    <div class="fs-4">1,250</div>
+                </div>
+            </div>
+            <div class="col-sm-4">
+                <div class="preview-tile">
+                    <div class="text-muted small">Unassigned seats</div>
+                    <div class="fs-4">86</div>
+                </div>
+            </div>
+            <div class="col-sm-4">
+                <div class="preview-tile">
+                    <div class="text-muted small">Renewing in 60 days</div>
+                    <div class="fs-4">3 subscriptions</div>
+                </div>
+            </div>
+        </div>
+
+        <table class="table table-sm mt-3 mb-0">
+            <thead>
+                <tr><th scope="col">Product (sample)</th><th scope="col">Purchased</th><th scope="col">Assigned</th><th scope="col">Renews</th></tr>
+            </thead>
+            <tbody>
+                <tr><td>Microsoft 365 E3</td><td>900</td><td>861</td><td>1 March</td></tr>
+                <tr><td>Microsoft 365 Business Premium</td><td>250</td><td>214</td><td>14 June</td></tr>
+                <tr><td>Visio Plan 2</td><td>100</td><td>89</td><td>2 October</td></tr>
+            </tbody>
+        </table>
+    </div>
+</section>

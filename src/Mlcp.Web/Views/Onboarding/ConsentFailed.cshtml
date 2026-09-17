@@ -1,0 +1,19 @@
+@model Mlcp.Web.Models.ConsentFailedViewModel
+@{
+    ViewData["Title"] = "Not connected";
+}
+
+<h1>The connection did not complete</h1>
+
+<p class="lead">@Model.Message</p>
+
+<p class="text-muted">
+    No data has been read from your organisation. You can start again whenever you are ready.
+</p>
+
+<p>
+    <a class="btn btn-primary" asp-action="Index">Back to the connection page</a>
+</p>
+
+@* A fixed reference from our own set of reasons, for support. Never text from the request. *@
+<p class="text-muted small">Reference: @Model.Reference</p>

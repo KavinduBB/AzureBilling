@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Mlcp.Web.Infrastructure;
 
 namespace Mlcp.Web.Controllers;
 
@@ -16,21 +17,38 @@ namespace Mlcp.Web.Controllers;
 [Route("guides")]
 public sealed class GuidesController : Controller
 {
+    private readonly MlcpWebOptions _options;
+    private readonly AdminConsentUrlBuilder _consentUrls;
+
+    public GuidesController(MlcpWebOptions options, AdminConsentUrlBuilder consentUrls)
+    {
+        _options = options;
+        _consentUrls = consentUrls;
+    }
+
     /// <summary>Guide A — Graph admin consent.</summary>
     [HttpGet("connect-organisation")]
     public IActionResult ConnectOrganisation() => View();
 
     /// <summary>Guide B — Azure RBAC for Cost Management.</summary>
     [HttpGet("azure-costs")]
-    public IActionResult AzureCosts() => View();
+    public IActionResult AzureCosts()
+    {
+        ViewData["DeployToAzureUrl"] = _options.DeployToAzureUrl;
+        return View();
+    }
 
     /// <summary>Guide C — billing role for prices and invoices.</summary>
     [HttpGet("prices-and-invoices")]
     public IActionResult PricesAndInvoices() => View();
 
-    /// <summary>Guide D — usage insights and the anonymisation setting.</summary>
+    /// <summary>Guide D — usage insights (a separate registration) and the anonymisation setting.</summary>
     [HttpGet("usage-insights")]
-    public IActionResult UsageInsights() => View();
+    public IActionResult UsageInsights()
+    {
+        ViewData["CanConnectUsageInsights"] = _consentUrls.HasUsageInsights && User.IsDirectoryAdmin();
+        return View();
+    }
 
     /// <summary>Guide E — licences that come from a CSP partner.</summary>
     [HttpGet("partner-managed")]
