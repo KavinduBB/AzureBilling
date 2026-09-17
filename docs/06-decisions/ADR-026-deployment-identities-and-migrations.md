@@ -20,9 +20,10 @@ The deployment review found five problems:
   - `mlcp_worker_user`, in roles `mlcp_worker` and `mlcp_system`.
 - The RLS system clause becomes:
   ```sql
-  (CAST(SESSION_CONTEXT(N'IsSystem') AS bit) = 1 AND IS_MEMBER(N'mlcp_system') = 1)
+  (CAST(SESSION_CONTEXT(N'IsSystem') AS bit) = 1
+   AND (IS_MEMBER(N'mlcp_system') = 1 OR IS_MEMBER(N'db_owner') = 1))
   ```
-  A web connection that sets the flag still sees nothing.
+  Verified on SQL Server 2022: a sysadmin or the Entra SQL admin group (the migrator) maps to `dbo`, for which `IS_MEMBER(N'mlcp_system')` is 0. The `db_owner` arm weakens nothing, because a `db_owner` can already disable the policy. The workload users are never `db_owner`, so a web connection that sets the flag still sees nothing beyond its stamped tenant.
 - **Service Bus:** web gets **Data Sender** (it enqueues discovery); worker gets **Data Receiver** and **Data Sender**. Data Owner is removed.
 - **Key Vault:** both identities get Secrets User and Certificate User. Crypto User on the Data Protection key is web only.
 - **Storage:** Blob Data Contributor on the Data Protection container is web only. *Storage Table Data Contributor* on the global region table goes to both (ADR-021).
