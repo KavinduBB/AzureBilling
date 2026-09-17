@@ -1,6 +1,10 @@
+using System.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Mlcp.Application.Onboarding;
+using Mlcp.Domain.Audit;
 using Mlcp.Domain.Tenancy;
+using Mlcp.Persistence.Rls;
 
 namespace Mlcp.Persistence.Stores;
 
@@ -19,6 +23,26 @@ public sealed class TenantDeletionStore : ITenantDeletionStore
     {
         _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
     }
+
+    /// <summary>
+    /// Every tenant-scoped table, children first and <c>Tenant</c> last. A unit test requires
+    /// this to cover every table in <see cref="TenantRlsScript.TenantScopedTables"/>, so a new
+    /// table cannot be left behind by deletion.
+    /// </summary>
+    /// <remarks>
+    /// The audit log goes first, in a single statement. Its self-reference from outcome row to
+    /// attempt row is checked at the end of that statement, so no finer ordering is needed.
+    /// </remarks>
+    public static IReadOnlyList<string> DeletionOrder { get; } =
+    [
+        DeletionCertificate.AuditLogTableName,
+        "SyncRun",
+        "PendingConsentRequest",
+        "OnboardingStep",
+        "AppUser",
+        "TenantCapabilityProfile",
+        "Tenant",
+    ];
 
     public async Task<IReadOnlyList<Tenant>> FindTenantsDueForDeletionAsync(
         DateTimeOffset asOfUtc,
@@ -39,82 +63,139 @@ public sealed class TenantDeletionStore : ITenantDeletionStore
     }
 
     /// <summary>
-    /// Removes every row for a tenant inside one transaction, returning per-table counts.
+    /// Removes every row for a tenant and writes its certificate, in one transaction.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Child tables are deleted explicitly rather than relying only on cascade, so the counts
-    /// that go into the certificate are measured rather than assumed. The order is
-    /// children-first, which keeps the operation valid even where a relationship is configured
-    /// to restrict rather than cascade.
+    /// The order matters:
     /// </para>
+    /// <list type="number">
+    /// <item><b>Lock and re-check.</b> The tenant row is read with <c>UPDLOCK, HOLDLOCK</c> and
+    /// checked with <see cref="Tenant.IsDueForDeletion"/>. A tenant that reconnected after the
+    /// candidate query is left alone. A second sweep racing on the same tenant waits on the lock,
+    /// then finds no row and does nothing, so it cannot issue a second certificate.</item>
+    /// <item><b>Digest.</b> The audit rows are read in id order under <c>HOLDLOCK</c>, which
+    /// takes range locks, so no audit row can be added between the digest and the delete. The
+    /// delete count is checked against the digested count, and any difference aborts.</item>
+    /// <item><b>Delete.</b> Set-based DELETEs in <see cref="DeletionOrder"/>, measured rather
+    /// than assumed. Nothing cascades from <c>Tenant</c> to the audit log (ADR-019), so a
+    /// forgotten table fails the final delete instead of vanishing uncounted.</item>
+    /// <item><b>Certify and commit.</b> The certificate is inserted and the transaction
+    /// committed together, so the certificate exists if and only if the data is gone.</item>
+    /// </list>
     /// <para>
-    /// <c>ExecuteDeleteAsync</c> issues set-based DELETEs rather than loading entities. Loading
-    /// a large tenant's rows into the change tracker in order to delete them would be slow and,
-    /// for a tenant with millions of consumption facts, would not complete at all.
+    /// The work runs inside the context's execution strategy. A strategy that retries would
+    /// otherwise refuse a transaction the application started itself.
     /// </para>
     /// </remarks>
-    public async Task<IReadOnlyDictionary<string, int>> DeleteAllTenantDataAsync(
+    public async Task<DeletionCertificate?> DeleteAllTenantDataAsync(
         Guid tenantId,
+        DateTimeOffset asOfUtc,
+        string correlationId,
         CancellationToken cancellationToken)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
+
         var context = _contextFactory.CreateDbContext();
 
         await using (context.ConfigureAwait(false))
         {
-            var transaction = await context.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            var strategy = context.Database.CreateExecutionStrategy();
 
-            await using (transaction.ConfigureAwait(false))
-            {
-                var counts = new Dictionary<string, int>(StringComparer.Ordinal)
-                {
-                    ["AuditLog"] = await context.AuditLogs
-                        .Where(a => a.TenantId == tenantId)
-                        .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false),
-
-                    ["SyncRun"] = await context.SyncRuns
-                        .Where(r => r.TenantId == tenantId)
-                        .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false),
-
-                    ["PendingConsentRequest"] = await context.PendingConsentRequests
-                        .Where(r => r.TenantId == tenantId)
-                        .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false),
-
-                    ["OnboardingStep"] = await context.OnboardingSteps
-                        .Where(s => s.TenantId == tenantId)
-                        .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false),
-
-                    ["AppUser"] = await context.AppUsers
-                        .Where(u => u.TenantId == tenantId)
-                        .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false),
-
-                    ["TenantCapabilityProfile"] = await context.TenantCapabilityProfiles
-                        .Where(p => p.TenantId == tenantId)
-                        .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false),
-
-                    // Last: everything above references it.
-                    ["Tenant"] = await context.Tenants
-                        .Where(t => t.TenantId == tenantId)
-                        .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false),
-                };
-
-                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-
-                return counts;
-            }
+            return await strategy
+                .ExecuteAsync(
+                    ct => DeleteInTransactionAsync(context, tenantId, asOfUtc, correlationId, ct),
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
     }
 
-    public async Task AddCertificateAsync(DeletionCertificate certificate, CancellationToken cancellationToken)
+    private static async Task<DeletionCertificate?> DeleteInTransactionAsync(
+        MlcpDbContext context,
+        Guid tenantId,
+        DateTimeOffset asOfUtc,
+        string correlationId,
+        CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(certificate);
+        // A retried attempt must not carry a certificate tracked by the attempt that failed.
+        context.ChangeTracker.Clear();
 
-        var context = _contextFactory.CreateDbContext();
+        var transaction = await context.Database
+            .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+            .ConfigureAwait(false);
 
-        await using (context.ConfigureAwait(false))
+        await using (transaction.ConfigureAwait(false))
         {
-            await context.DeletionCertificates.AddAsync(certificate, cancellationToken).ConfigureAwait(false);
+            var tenant = await context.Tenants
+                .FromSql($"SELECT * FROM [dbo].[Tenant] WITH (UPDLOCK, HOLDLOCK) WHERE [TenantId] = {tenantId}")
+                .AsNoTracking()
+                .SingleOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            if (tenant is null
+                || !tenant.IsDueForDeletion(asOfUtc)
+                || tenant.DisconnectedUtc is not { } disconnectedUtc)
+            {
+                await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+                return null;
+            }
+
+            using var digest = new AuditLogDigest();
+
+            var auditRows = context.AuditLogs
+                .FromSql($"SELECT * FROM [dbo].[AuditLog] WITH (HOLDLOCK) WHERE [TenantId] = {tenantId}")
+                .AsNoTracking()
+                .OrderBy(a => a.AuditLogId)
+                .AsAsyncEnumerable()
+                .WithCancellation(cancellationToken)
+                .ConfigureAwait(false);
+
+            await foreach (var row in auditRows)
+            {
+                digest.Append(row);
+            }
+
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            foreach (var table in DeletionOrder)
+            {
+                TenantRlsScript.EnsurePlainIdentifier(table);
+
+                var sql = "DELETE FROM [dbo].[" + table + "] WHERE [TenantId] = @tenantId;";
+
+                counts[table] = await context.Database
+                    .ExecuteSqlRawAsync(sql, [new SqlParameter("@tenantId", tenantId)], cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (counts[DeletionCertificate.AuditLogTableName] != digest.RowCount)
+            {
+                throw new InvalidOperationException(
+                    $"Audit rows changed during deletion of tenant {tenantId}: digested {digest.RowCount}, "
+                    + $"deleted {counts[DeletionCertificate.AuditLogTableName]}. Rolled back.");
+            }
+
+            if (counts["Tenant"] != 1)
+            {
+                throw new InvalidOperationException(
+                    $"Expected to delete one tenant row for {tenantId} but deleted {counts["Tenant"]}. Rolled back.");
+            }
+
+            var certificate = DeletionCertificate.Issue(
+                tenantId,
+                tenant.DisplayName,
+                disconnectedUtc,
+                counts,
+                digest.Finish(),
+                correlationId,
+                asOfUtc);
+
+            context.DeletionCertificates.Add(certificate);
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+            return certificate;
         }
     }
 }

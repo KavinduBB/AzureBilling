@@ -113,4 +113,95 @@ public class SensitiveDataRedactorTests
 
         SensitiveDataRedactor.Redact(message).Should().Be(message);
     }
+
+    [Theory]
+    [InlineData("DefaultEndpointsProtocol=https;AccountName=mlcp;AccountKey=c2VjcmV0S2V5VmFsdWU9PQ==;EndpointSuffix=core.windows.net", "c2VjcmV0S2V5VmFsdWU9PQ==", "AccountName=mlcp")]
+    [InlineData("Endpoint=sb://mlcp.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=U2hhcmVkS2V5U2VjcmV0=", "U2hhcmVkS2V5U2VjcmV0=", "SharedAccessKeyName=RootManageSharedAccessKey")]
+    [InlineData("BlobEndpoint=https://mlcp.blob.core.windows.net/;SharedAccessSignature=sv=2023-11-03&ss=b&sig=QmxvYlNpZ25hdHVyZQ%3D", "QmxvYlNpZ25hdHVyZQ", "BlobEndpoint=https://mlcp.blob.core.windows.net/")]
+    [InlineData("Server=tcp:mlcp.database.windows.net;Database=Mlcp;User Id=mlcp;Password=Hunter 2 secret;Encrypt=True", "Hunter 2 secret", "Database=Mlcp")]
+    [InlineData("Server=localhost;Uid=sa;Pwd=Pa55word!;TrustServerCertificate=True", "Pa55word!", "Uid=sa")]
+    public void Secrets_in_connection_strings_are_removed(string connectionString, string secret, string survivor)
+    {
+        var redacted = SensitiveDataRedactor.Redact(connectionString);
+
+        redacted.Should().NotContain(secret);
+        redacted.Should().Contain(SensitiveDataRedactor.Placeholder);
+        redacted.Should().Contain(survivor, "the non-secret parts identify which resource was involved");
+    }
+
+    [Theory]
+    [InlineData("grant_type=refresh_token&refresh_token=0.ARoAv4j5cvGG&client_id=abc", "0.ARoAv4j5cvGG")]
+    [InlineData("grant_type=client_credentials&client_secret=S3cr3t~Value&scope=.default", "S3cr3t~Value")]
+    [InlineData("client_secret=S3cr3t~Value&grant_type=client_credentials", "S3cr3t~Value")]
+    [InlineData("https://app.example/signin-oidc#id_token=opaque-id-token-value&state=1", "opaque-id-token-value")]
+    [InlineData("{\"refresh_token\": \"0.ARoAv4j5cvGG\"}", "0.ARoAv4j5cvGG")]
+    [InlineData("{\"id_token\":\"opaque\"}", "opaque")]
+    public void Oauth_secrets_in_forms_fragments_and_json_are_removed(string text, string secret)
+    {
+        SensitiveDataRedactor.Redact(text).Should().NotContain(secret);
+    }
+
+    [Theory]
+    [InlineData("request failed; Bearer 0123456789abcdefOPAQUE-token rejected", "0123456789abcdefOPAQUE-token")]
+    [InlineData("headers: {\"Authorization\": \"Bearer opaque0123456789\"}", "opaque0123456789")]
+    [InlineData("Authorization=Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA==")]
+    [InlineData("SharedAccessSignature sr=https%3a%2f%2fmlcp.servicebus.windows.net&sig=U2lnbmF0dXJl&se=1700000000&skn=send", "U2lnbmF0dXJl")]
+    public void Credentials_after_a_scheme_are_removed_anywhere(string text, string secret)
+    {
+        SensitiveDataRedactor.Redact(text).Should().NotContain(secret);
+    }
+
+    [Fact]
+    public void An_unsigned_jwt_is_still_removed()
+    {
+        const string unsigned = "eyJhbGciOiJub25lIn0.eyJzdWIiOiIxMjM0NTY3ODkwIn0.";
+
+        SensitiveDataRedactor.Redact($"token was {unsigned} end").Should().NotContain("eyJzdWIiOiIxMjM0NTY3ODkwIn0");
+    }
+
+    [Fact]
+    public void A_sas_url_nested_in_another_url_is_removed()
+    {
+        const string text =
+            "redirect to https://app.example/return?next=https%3A%2F%2Fx.blob.core.windows.net%2Fa.pdf%3Fsv%3D2023%26sig%3DTmVzdGVkU2ln%26se%3D2026";
+
+        SensitiveDataRedactor.Redact(text).Should().NotContain("TmVzdGVkU2ln");
+    }
+
+    [Fact]
+    public void A_sas_signature_in_free_text_is_removed()
+    {
+        SensitiveDataRedactor.Redact("download failed (sig=RnJlZVRleHRTaWc) after 3 attempts")
+            .Should().NotContain("RnJlZVRleHRTaWc");
+    }
+
+    [Fact]
+    public void User_info_in_a_uri_is_dropped()
+    {
+        SensitiveDataRedactor.RedactUri("https://user:p4ssw0rd@example.com/path")
+            .Should().NotContain("p4ssw0rd").And.Contain("example.com/path");
+    }
+
+    [Theory]
+    [InlineData("Graph returned error code=429 after 3 attempts")]
+    [InlineData("{\"error\":{\"code\":\"Authorization_RequestDenied\",\"message\":\"Insufficient privileges\"}}")]
+    [InlineData("Basic information about the tenant was refreshed")]
+    [InlineData("Bearer authentication failed for tenant 00000000-0000-0000-0000-000000000001")]
+    [InlineData("SharedAccessKeyName=RootManageSharedAccessKey")]
+    [InlineData("The token cache was empty; acquiring a new token.")]
+    public void Diagnostic_text_that_only_looks_sensitive_survives(string text)
+    {
+        // Microsoft's error codes are the most useful thing in a failure log.
+        SensitiveDataRedactor.Redact(text).Should().Be(text);
+    }
+
+    [Fact]
+    public void Redacting_twice_changes_nothing_more()
+    {
+        const string text = "Authorization: Bearer abcdefghijklmnop0123; AccountKey=abc==; https://x/y?sig=zzz&sv=1";
+
+        var once = SensitiveDataRedactor.Redact(text);
+
+        SensitiveDataRedactor.Redact(once).Should().Be(once);
+    }
 }

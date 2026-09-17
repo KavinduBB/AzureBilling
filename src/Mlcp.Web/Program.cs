@@ -30,15 +30,9 @@ if (!string.IsNullOrWhiteSpace(keyVaultUri))
     builder.Configuration.AddAzureKeyVault(new Uri(keyVaultUri), new DefaultAzureCredential());
 }
 
-builder.Host.UseSerilog((context, services, configuration) => configuration
-    .ReadFrom.Configuration(context.Configuration)
-    .ReadFrom.Services(services)
-    .Enrich.FromLogContext()
-
-    // Redaction is a pipeline stage, not a call-site discipline: a bearer token or SAS URL
-    // reaching a sink because one developer forgot is not an acceptable failure mode.
-    .Enrich.With<RedactionEnricher>()
-    .WriteTo.Console(formatProvider: CultureInfo.InvariantCulture));
+// Redaction (properties, message templates and exceptions) is built into the shared pipeline,
+// so no sink, whether configured here or in appsettings, can receive a secret (rule 14).
+builder.Services.AddMlcpSerilog(builder.Configuration);
 
 var deployment = new DeploymentOptions(builder.Configuration["Mlcp:Region"] ?? DeploymentOptions.Default.Region);
 builder.Services.AddSingleton(deployment);

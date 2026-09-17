@@ -84,17 +84,57 @@ internal sealed class AuditLogConfiguration : IEntityTypeConfiguration<AuditLog>
         builder.Property(a => a.FinancialImpactAmount).HasColumnType("decimal(19,4)");
         builder.Property(a => a.FinancialImpactCurrency).HasMaxLength(3).IsFixedLength();
 
-        // Append-only: no RowVersion, because nothing contends to update an audit row. The
-        // single permitted mutation, resolving an attempted outcome, is last-writer-wins by
-        // design and is itself performed once by the code path that wrote the row.
+        builder.Property(a => a.Detail).HasMaxLength(AuditLog.MaxDetailLength);
+
+        // Append-only (ADR-019): rows are never updated, so there is no concurrency token.
         builder.Ignore(a => a.RowVersion);
 
         builder.HasIndex(a => new { a.TenantId, a.OccurredUtc }).IsDescending(false, true);
         builder.HasIndex(a => a.CorrelationId);
 
+        // An outcome row points at its attempt. The filtered unique index allows at most one
+        // outcome per attempt, so AuditQueries.WithOutcome can never duplicate an action.
+        builder.HasIndex(a => a.AttemptAuditLogId)
+            .IsUnique()
+            .HasFilter("[AttemptAuditLogId] IS NOT NULL");
+
+        builder.HasOne<AuditLog>()
+            .WithMany()
+            .HasForeignKey(a => a.AttemptAuditLogId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+        // No cascade (ADR-019): deleting a tenant row must never silently take its audit
+        // history with it. TenantDeletionStore deletes audit rows explicitly, after taking the
+        // digest that goes into the certificate.
         builder.HasOne<Tenant>()
             .WithMany()
             .HasForeignKey(a => a.TenantId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.NoAction);
+    }
+}
+
+/// <summary>
+/// The deletion-integrity part of the <see cref="DeletionCertificate"/> mapping. The basic
+/// mapping is in <c>DeletionCertificateConfiguration</c>. EF applies both, and they do not
+/// overlap.
+/// </summary>
+internal sealed class DeletionCertificateIntegrityConfiguration : IEntityTypeConfiguration<DeletionCertificate>
+{
+    public void Configure(EntityTypeBuilder<DeletionCertificate> builder)
+    {
+        builder.Property(c => c.AuditLogSha256)
+            .HasMaxLength(64)
+            .IsUnicode(false)
+            .IsFixedLength()
+            .IsRequired();
+
+        // One certificate per period of connection. Two deletion sweeps racing on the same
+        // tenant already serialise on the tenant row lock. If that ever failed, this index
+        // would still reject the second certificate, rolling back its deletion with it. A
+        // tenant that reconnects and leaves again has a new DisconnectedUtc, so it can still
+        // get a second certificate.
+        builder.HasIndex(c => new { c.TenantId, c.DisconnectedUtc })
+            .IsUnique()
+            .HasDatabaseName("UX_DeletionCertificate_TenantId_DisconnectedUtc");
     }
 }
