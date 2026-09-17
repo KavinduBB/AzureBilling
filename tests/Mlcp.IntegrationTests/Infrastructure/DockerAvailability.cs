@@ -28,7 +28,16 @@ public static class DockerAvailability
         && !string.Equals(value, "false", StringComparison.OrdinalIgnoreCase)
         && !string.Equals(value, "0", StringComparison.Ordinal);
 
-    public static bool IsAvailable => Detected.Value;
+    /// <summary>
+    /// A disposable SQL Server supplied instead of a container (<c>MLCP_TEST_SQL</c>). The
+    /// database named in it is dropped and re-created by the fixture, so it must be one that
+    /// exists only for tests.
+    /// </summary>
+    public static string? ExternalSqlConnectionString =>
+        Environment.GetEnvironmentVariable("MLCP_TEST_SQL") is { Length: > 0 } value ? value : null;
+
+    /// <summary>True when the SQL-backed suites can run: a container runtime or an external server.</summary>
+    public static bool IsAvailable => ExternalSqlConnectionString is not null || Detected.Value;
 
     /// <summary>Throws when Docker is required but missing, naming the cause.</summary>
     public static void ThrowIfRequiredButMissing()

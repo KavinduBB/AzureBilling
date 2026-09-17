@@ -31,6 +31,16 @@ public sealed class SqlServerFixture : IAsyncLifetime
             return;
         }
 
+        if (DockerAvailability.ExternalSqlConnectionString is { } external)
+        {
+            ConnectionString = external;
+
+            await using var externalContext = CreateContext(FixedTenantContext.System);
+            await externalContext.Database.EnsureDeletedAsync();
+            await externalContext.Database.MigrateAsync();
+            return;
+        }
+
         _container = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest")
             .Build();
 
