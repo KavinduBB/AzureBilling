@@ -7,13 +7,26 @@ namespace Mlcp.Domain.Capabilities;
 /// <param name="Reason">Set only when <paramref name="IsAvailable"/> is false.</param>
 /// <param name="Guide">Remediation guide to surface in the onboarding checklist.</param>
 /// <param name="Detail">Probe-time context. Never a secret; it is rendered and logged.</param>
-/// <param name="CheckedUtc">When this capability was last probed.</param>
+/// <param name="CheckedUtc">When this capability's verdict was last established.</param>
+/// <param name="IsStale">
+/// The last probe failed transiently, so this verdict is the previous one, kept rather than
+/// downgraded (ADR-016). <paramref name="StaleDetail"/> says why.
+/// </param>
+/// <param name="StaleDetail">The <c>ProviderError</c> detail from the failed probe.</param>
+/// <param name="StaleSinceUtc">When the verdict first became stale.</param>
 public sealed record CapabilityStatus(
     bool IsAvailable,
     CapabilityUnavailableReason? Reason,
     RemediationGuide Guide,
     string? Detail,
-    DateTimeOffset CheckedUtc);
+    DateTimeOffset CheckedUtc,
+    bool IsStale = false,
+    string? StaleDetail = null,
+    DateTimeOffset? StaleSinceUtc = null)
+{
+    /// <summary>True for the placeholder written before any discovery ran.</summary>
+    public bool IsUndiscovered => !IsAvailable && Reason == CapabilityUnavailableReason.NotDiscovered;
+}
 
 /// <summary>
 /// Cached resolution of every capability for a tenant. Drives which providers are wired,
@@ -23,6 +36,7 @@ public sealed record CapabilityStatus(
 public class TenantCapabilityProfile : TenantEntity
 {
     private readonly Dictionary<Capability, CapabilityStatus> _statuses = [];
+    private List<string> _verifiedDomains = [];
 
     /// <summary>One profile per tenant, so the tenant id is also the primary key.</summary>
     public DateTimeOffset LastProfiledUtc { get; private set; }
@@ -92,6 +106,72 @@ public class TenantCapabilityProfile : TenantEntity
             unavailable.Detail,
             nowUtc);
 
+        Touch(nowUtc);
+    }
+
+    /// <summary>
+    /// Keeps the previous verdict for <paramref name="capability"/> but marks it stale, because the
+    /// probe failed transiently (ADR-016: no downgrade on a transient failure). A capability that
+    /// was never discovered has no verdict to keep and is recorded as <c>ProviderError</c> instead.
+    /// </summary>
+    public void MarkStale(Capability capability, string? detail, DateTimeOffset nowUtc)
+    {
+        if (capability == Capability.Unknown)
+        {
+            throw new ArgumentException("Capability.Unknown cannot hold a status.", nameof(capability));
+        }
+
+        if (!_statuses.TryGetValue(capability, out var previous) || previous.IsUndiscovered)
+        {
+            MarkUnavailable(CapabilityUnavailable.ProviderError(capability, detail), nowUtc);
+            return;
+        }
+
+        _statuses[capability] = previous with
+        {
+            IsStale = true,
+            StaleDetail = detail,
+            StaleSinceUtc = previous.StaleSinceUtc ?? nowUtc,
+        };
+
+        Touch(nowUtc);
+    }
+
+    /// <summary>Verified domains of the tenant, from <c>GET /organization</c> (ADR-018 consent-request recipients).</summary>
+    public IReadOnlyList<string> VerifiedDomains => _verifiedDomains;
+
+    /// <summary>Cost scope rung and per-subscription agreements from the last discovery.</summary>
+    public CapabilityDiscoveryDetail DiscoveryDetail { get; private set; } = CapabilityDiscoveryDetail.Empty;
+
+    /// <summary>Replaces the verified domain list. Normalised to lower case, de-duplicated.</summary>
+    public void SetVerifiedDomains(IEnumerable<string> domains, DateTimeOffset nowUtc)
+    {
+        ArgumentNullException.ThrowIfNull(domains);
+
+        _verifiedDomains = domains
+            .Where(d => !string.IsNullOrWhiteSpace(d))
+            .Select(d => d.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Touch(nowUtc);
+    }
+
+    public void SetDiscoveryDetail(CapabilityDiscoveryDetail detail, DateTimeOffset nowUtc)
+    {
+        DiscoveryDetail = detail ?? throw new ArgumentNullException(nameof(detail));
+        Touch(nowUtc);
+    }
+
+    /// <summary>
+    /// Moves <see cref="NextProfileUtc"/> forward without recording a completed pass. The scheduler
+    /// uses it as a lease so a tenant already queued is not picked again; discovery's
+    /// <see cref="CompleteProfiling"/> replaces it.
+    /// </summary>
+    public void LeaseUntil(DateTimeOffset nextProfileUtc, DateTimeOffset nowUtc)
+    {
+        NextProfileUtc = nextProfileUtc;
         Touch(nowUtc);
     }
 
@@ -171,5 +251,19 @@ public class TenantCapabilityProfile : TenantEntity
                 _statuses[capability] = status;
             }
         }
+    }
+
+    /// <summary>Persistence projection of <see cref="VerifiedDomains"/> (column <c>VerifiedDomains</c>, nullable JSON array).</summary>
+    private string? VerifiedDomainsJson
+    {
+        get => _verifiedDomains.Count == 0 ? null : DomainJson.Serialize(_verifiedDomains);
+        set => _verifiedDomains = DomainJson.Deserialize<List<string>>(value) ?? [];
+    }
+
+    /// <summary>Persistence projection of <see cref="DiscoveryDetail"/> (column <c>DiscoveryDetail</c>, nullable JSON).</summary>
+    private string? DiscoveryDetailJson
+    {
+        get => ReferenceEquals(DiscoveryDetail, CapabilityDiscoveryDetail.Empty) ? null : DomainJson.Serialize(DiscoveryDetail);
+        set => DiscoveryDetail = DomainJson.Deserialize<CapabilityDiscoveryDetail>(value) ?? CapabilityDiscoveryDetail.Empty;
     }
 }

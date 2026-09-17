@@ -1,0 +1,14 @@
+{
+  "value": [
+    {
+      "id": "/providers/Microsoft.Billing/billingAccounts/00000000-0000-0000-0000-000000000000:00000000-0000-0000-0000-000000000000_2019-05-31/billingProfiles/xxxx-xxxx-xxx-xxx",
+      "name": "xxxx-xxxx-xxx-xxx",
+      "type": "Microsoft.Billing/billingAccounts/billingProfiles",
+      "properties": {
+        "displayName": "Contoso operations billing",
+        "currency": "USD",
+        "status": "Active"
+      }
+    }
+  ]
+}

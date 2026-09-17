@@ -1,0 +1,15 @@
+{
+  "value": [
+    {
+      "id": "/providers/Microsoft.Billing/billingAccounts/00000000-0000-0000-0000-000000000000:00000000-0000-0000-0000-000000000000_2019-05-31/billingRoleAssignments/10000000-aaaa-bbbb-cccc-100000000000_00000000-0000-0000-0000-000000000000",
+      "name": "10000000-aaaa-bbbb-cccc-100000000000_00000000-0000-0000-0000-000000000000",
+      "type": "Microsoft.Billing/billingAccounts/billingRoleAssignments",
+      "properties": {
+        "principalId": "00000000-0000-0000-0000-000000000000",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "/providers/Microsoft.Billing/billingAccounts/00000000-0000-0000-0000-000000000000:00000000-0000-0000-0000-000000000000_2019-05-31/billingRoleDefinitions/50000000-aaaa-bbbb-cccc-100000000002",
+        "scope": "/providers/Microsoft.Billing/billingAccounts/00000000-0000-0000-0000-000000000000:00000000-0000-0000-0000-000000000000_2019-05-31"
+      }
+    }
+  ]
+}

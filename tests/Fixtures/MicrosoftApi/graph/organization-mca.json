@@ -1,0 +1,25 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#organization(id,displayName,verifiedDomains)",
+  "value": [
+    {
+      "id": "00000000-0000-0000-0000-0000000000a1",
+      "displayName": "Contoso",
+      "verifiedDomains": [
+        {
+          "capabilities": "Email, OfficeCommunicationsOnline",
+          "isDefault": true,
+          "isInitial": false,
+          "name": "contoso.example",
+          "type": "Managed"
+        },
+        {
+          "capabilities": "Email",
+          "isDefault": false,
+          "isInitial": true,
+          "name": "contoso.onmicrosoft.com",
+          "type": "Managed"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#subscribedSkus(skuId,skuPartNumber)",
+  "value": [
+    {
+      "skuId": "00000000-0000-0000-0000-000000000e05",
+      "skuPartNumber": "ENTERPRISEPACK"
+    },
+    {
+      "skuId": "00000000-0000-0000-0000-000000000e03",
+      "skuPartNumber": "SPE_E3"
+    }
+  ]
+}

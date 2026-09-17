@@ -1,0 +1,15 @@
+{
+  "value": [
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000101",
+      "subscriptionId": "00000000-0000-0000-0000-000000000101",
+      "tenantId": "00000000-0000-0000-0000-0000000000a1",
+      "displayName": "Production",
+      "state": "Enabled"
+    }
+  ],
+  "count": {
+    "type": "Total",
+    "value": 1
+  }
+}
