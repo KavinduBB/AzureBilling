@@ -74,9 +74,7 @@ jobs:
           MLCP_REQUIRE_DOCKER: "true"
           # Minimum number of passing TenantIsolation tests. Raise it whenever the suite grows,
           # so that deleting tests fails CI.
-          # TODO(hardening): set to the new suite count once the integrator reports it; 30 is the
-          # interim floor.
-          MIN_TENANT_ISOLATION_TESTS: "30"
+          MIN_TENANT_ISOLATION_TESTS: "70"
         run: |
           set -euo pipefail
           dotnet test tests/Mlcp.IntegrationTests/Mlcp.IntegrationTests.csproj \

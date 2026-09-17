@@ -102,6 +102,9 @@ param globalHostName string
 @description('Regional host names keyed by region code, e.g. { eu: \'eu.app.example.com\', us: \'us.app.example.com\' }.')
 param regionHosts object
 
+@description('Display names of the regions keyed by region code, shown on the Connect page (ADR-021).')
+param regionNames object
+
 @description('URI of the global TenantRegions table.')
 param regionDirectoryTableUri string
 
@@ -213,9 +216,17 @@ var regionHostEnvironment = [
   }
 ]
 
+var regionNameEnvironment = [
+  for code in objectKeys(regionNames): {
+    name: 'Mlcp__Regions__Names__${code}'
+    value: regionNames[code]
+  }
+]
+
 var webEnvironment = concat(
   commonEnvironment,
   regionHostEnvironment,
+  regionNameEnvironment,
   [
     {
       // Picked up by DefaultAzureCredential, the Data Protection providers and
@@ -556,10 +567,14 @@ resource createUsersJob 'Microsoft.App/jobs@2026-01-01' = {
             '-b'
             '-i'
             '/app/sql/create-users.sql'
+            // One -v per variable: portable across go-sqlcmd and ODBC sqlcmd.
             '-v'
             'WebUserName=mlcp_web_user'
+            '-v'
             'WebClientId=${webIdentityClientId}'
+            '-v'
             'WorkerUserName=mlcp_worker_user'
+            '-v'
             'WorkerClientId=${workerIdentityClientId}'
           ]
           resources: {

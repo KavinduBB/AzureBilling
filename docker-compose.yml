@@ -7,8 +7,8 @@
 # (docs/03-architecture.md §8, ADR-026). The passwords below are for local use only and are
 # committed on purpose: a throwaway container has nothing to protect.
 #
-# Azurite is not included: no code uses local storage. Data Protection keys are kept in memory
-# locally, and the tenant-region directory has an in-memory implementation (ADR-021).
+# Azurite is not included: no code uses local storage. Data Protection keys use the default on-disk
+# key store locally, and the tenant-region directory has an in-memory implementation (ADR-021).
 
 name: mlcp
 

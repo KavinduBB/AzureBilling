@@ -6,8 +6,8 @@
 --
 --   sqlcmd -S tcp:<server>,1433 -d mlcp --authentication-method ActiveDirectoryManagedIdentity \
 --          -U <migrator client id> -b -i /app/sql/create-users.sql \
---          -v WebUserName=mlcp_web_user WebClientId=<web identity client id> \
---             WorkerUserName=mlcp_worker_user WorkerClientId=<worker identity client id>
+--          -v WebUserName=mlcp_web_user -v WebClientId=<web identity client id> \
+--          -v WorkerUserName=mlcp_worker_user -v WorkerClientId=<worker identity client id>
 --
 -- Users are created WITH SID = <client id>, TYPE = E, not FROM EXTERNAL PROVIDER. When the caller
 -- is a service principal (the migrator), FROM EXTERNAL PROVIDER can only resolve the name if the

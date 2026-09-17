@@ -30,8 +30,8 @@ var vnetName = '${namePrefix}-${environmentName}-vnet'
 // at all, depending on the firewall. Each zone overrides that resolution inside the VNet.
 var privateDnsZoneNames = [
   'privatelink${environment().suffixes.sqlServerHostname}'
-  // Azure Managed Redis (Microsoft.Cache/redisEnterprise), not the retired Azure Cache for Redis
-  // zone (ADR-026).
+  // Azure Managed Redis (Microsoft.Cache/redisEnterprise) zone, not the zone of Azure Cache for
+  // Redis, which is being retired (ADR-026).
   'privatelink.redis.azure.net'
   'privatelink.servicebus.windows.net'
   'privatelink.vaultcore.azure.net'

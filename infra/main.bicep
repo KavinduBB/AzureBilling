@@ -92,6 +92,12 @@ param globalHostName string
 @description('Host name of every regional stack, keyed by region code.')
 param regionHosts object
 
+@description('Display name of every region, keyed by region code (shown on the Connect page).')
+param regionNames object = {
+  eu: 'European Union'
+  us: 'United States'
+}
+
 @description('TenantRegions table URI, from the global deployment output regionDirectoryTableUri.')
 param regionDirectoryTableUri string
 
@@ -229,6 +235,7 @@ module apps 'modules/apps.bicep' = {
     publicBaseUrl: publicBaseUrl
     globalHostName: globalHostName
     regionHosts: regionHosts
+    regionNames: regionNames
     regionDirectoryTableUri: regionDirectoryTableUri
     customerRbacTemplateUrl: customerRbacTemplateUrl
     emailEndpoint: emailEndpoint
@@ -246,11 +253,14 @@ output webFqdn string = apps.outputs.webFqdn
 @description('Container Apps environment default domain. A revision FQDN is <webAppName>--<revisionSuffix>.<this domain>.')
 output environmentDefaultDomain string = apps.outputs.environmentDefaultDomain
 
-@description('Redirect URIs to register on the core app registration for this region (infra/entra.md).')
+@description('Redirect URIs to register for this region (infra/entra.md): core registration.')
 output entraRedirectUris string[] = [
   '${publicBaseUrl}/signin-oidc'
   '${publicBaseUrl}/onboarding/consent-callback'
 ]
+
+@description('Redirect URI to register for this region on the MLCP Usage Insights registration.')
+output usageInsightsRedirectUri string = '${publicBaseUrl}/onboarding/usage-insights-callback'
 
 @description('Principal id of the migrator identity. Add it to the SQL admin group before the first migrate job runs. Customers never grant anything to MLCP\'s managed identities; they grant roles to the MLCP enterprise application (service principal) in their own tenant.')
 output migratorPrincipalId string = migratorIdentity.properties.principalId
