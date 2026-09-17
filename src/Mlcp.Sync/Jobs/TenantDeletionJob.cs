@@ -13,9 +13,18 @@ namespace Mlcp.Sync.Jobs;
 /// when the promise is "we will destroy your data on the 30th".
 /// </para>
 /// <para>
-/// The sweep is safe to run concurrently with itself: it selects only tenants still in the
-/// grace period, and deleting one is a single transaction that removes the tenant row, so a
-/// second pass finds nothing to do.
+/// The sweep is safe to run concurrently with itself, including across worker replicas:
+/// </para>
+/// <list type="bullet">
+/// <item>Each tenant is deleted in one transaction that first locks the tenant row and checks
+/// again that it is due.</item>
+/// <item>A second sweep waits on that lock, then finds the tenant gone and does nothing.</item>
+/// <item>A unique index on (TenantId, DisconnectedUtc) rejects a duplicate certificate even if
+/// the lock were bypassed.</item>
+/// <item>A tenant that reconnected in the meantime fails the check and is left untouched.</item>
+/// </list>
+/// <para>
+/// The certificate is written inside the same transaction (ADR-019).
 /// </para>
 /// </remarks>
 public sealed class TenantDeletionJob : BackgroundService

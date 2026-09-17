@@ -11,28 +11,56 @@ namespace Mlcp.Application.Onboarding;
 /// </remarks>
 public interface ITenantDeletionStore
 {
-    /// <summary>Tenants whose grace period has elapsed and whose data is now due for destruction.</summary>
+    /// <summary>
+    /// Tenants whose grace period has elapsed. This is only a candidate list: eligibility is
+    /// checked again inside the deletion transaction.
+    /// </summary>
     Task<IReadOnlyList<Tenant>> FindTenantsDueForDeletionAsync(DateTimeOffset asOfUtc, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Deletes every row belonging to <paramref name="tenantId"/> and returns the number removed
-    /// per table. Must be atomic: a partial deletion is worse than none, because it leaves data
-    /// we have already told the customer is gone.
+    /// Deletes every row belonging to <paramref name="tenantId"/> and writes the deletion
+    /// certificate, all in one transaction (ADR-019).
     /// </summary>
-    Task<IReadOnlyDictionary<string, int>> DeleteAllTenantDataAsync(Guid tenantId, CancellationToken cancellationToken);
-
-    Task AddCertificateAsync(DeletionCertificate certificate, CancellationToken cancellationToken);
+    /// <remarks>
+    /// Implementations must:
+    /// <list type="number">
+    /// <item>lock the tenant row and check again that it is in the grace period and due as of
+    /// <paramref name="asOfUtc"/>;</item>
+    /// <item>take the audit-log digest;</item>
+    /// <item>delete every tenant-scoped table;</item>
+    /// <item>insert the certificate;</item>
+    /// <item>commit.</item>
+    /// </list>
+    /// A partial deletion is worse than none, because it leaves data we have already told the
+    /// customer is gone. A certificate without the deletion, or the reverse, is a false record.
+    /// </remarks>
+    /// <returns>
+    /// The certificate written, or null when the tenant was no longer eligible, for example
+    /// because it reconnected or another sweep already deleted it. Nothing is changed in that case.
+    /// </returns>
+    Task<DeletionCertificate?> DeleteAllTenantDataAsync(
+        Guid tenantId,
+        DateTimeOffset asOfUtc,
+        string correlationId,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
 /// Destroys the data of tenants whose 30-day grace period has expired, and records that it did
-/// (P0-11, docs/03-architecture.md §8).
+/// (P0-11, docs/03-architecture.md §8, ADR-019).
 /// </summary>
 /// <remarks>
+/// <para>
 /// The sweep processes one tenant per transaction rather than all of them in one. A single
 /// failure then costs one tenant's deletion, retried on the next run, instead of rolling back a
 /// batch and leaving every customer in the batch believing their data was destroyed when it was
 /// not.
+/// </para>
+/// <para>
+/// The certificate is written by the store inside the deletion transaction, never here
+/// afterwards. A crash between the two steps could otherwise leave data deleted with no
+/// record, or, if the order were reversed, a record for data that still exists.
+/// </para>
 /// </remarks>
 public sealed class TenantDeletionService
 {
@@ -54,44 +82,56 @@ public sealed class TenantDeletionService
     public async Task<IReadOnlyList<DeletionCertificate>> RunAsync(CancellationToken cancellationToken)
     {
         var now = _timeProvider.GetUtcNow();
-        var due = await _store.FindTenantsDueForDeletionAsync(now, cancellationToken).ConfigureAwait(false);
+        var candidates = await _store.FindTenantsDueForDeletionAsync(now, cancellationToken).ConfigureAwait(false);
 
-        if (due.Count == 0)
+        if (candidates.Count == 0)
         {
             return [];
         }
 
-        _logger.LogWarning("{Count} tenant(s) are due for permanent deletion.", due.Count);
+        _logger.LogInformation("{Count} tenant(s) are candidates for permanent deletion.", candidates.Count);
 
-        var certificates = new List<DeletionCertificate>(due.Count);
+        var certificates = new List<DeletionCertificate>(candidates.Count);
 
-        foreach (var tenant in due)
+        foreach (var tenant in candidates)
         {
+            if (!tenant.IsDueForDeletion(now))
+            {
+                _logger.LogWarning(
+                    "Tenant {TenantId} was returned as due for deletion but is not due as of {AsOfUtc}; skipped.",
+                    tenant.TenantId,
+                    now);
+                continue;
+            }
+
             var correlationId = Guid.NewGuid().ToString("N");
 
             try
             {
-                var counts = await _store.DeleteAllTenantDataAsync(tenant.TenantId, cancellationToken)
+                var certificate = await _store
+                    .DeleteAllTenantDataAsync(tenant.TenantId, now, correlationId, cancellationToken)
                     .ConfigureAwait(false);
 
-                var certificate = DeletionCertificate.Issue(
-                    tenant.TenantId,
-                    tenant.DisplayName,
-                    tenant.DeleteScheduledUtc ?? now,
-                    counts,
-                    correlationId,
-                    now);
-
-                await _store.AddCertificateAsync(certificate, cancellationToken).ConfigureAwait(false);
+                if (certificate is null)
+                {
+                    // Not an error: the tenant reconnected after the candidate query, or another
+                    // sweep deleted it first. Nothing was deleted by this run.
+                    _logger.LogInformation(
+                        "Tenant {TenantId} was no longer eligible for deletion when locked; nothing was deleted. Correlation {CorrelationId}.",
+                        tenant.TenantId,
+                        correlationId);
+                    continue;
+                }
 
                 certificates.Add(certificate);
 
                 _logger.LogWarning(
-                    "Deleted all data for tenant {TenantId}: {RowsDeleted} row(s) across {TableCount} table(s). Certificate {CertificateId}.",
+                    "Permanently deleted tenant {TenantId}: {RowsDeleted} row(s). Certificate {CertificateId} (audit digest {AuditLogSha256}) was written in the same transaction. Correlation {CorrelationId}.",
                     tenant.TenantId,
                     certificate.RowsDeleted,
-                    counts.Count,
-                    certificate.DeletionCertificateId);
+                    certificate.DeletionCertificateId,
+                    certificate.AuditLogSha256,
+                    correlationId);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -103,8 +143,12 @@ public sealed class TenantDeletionService
             {
                 _logger.LogError(
                     ex,
-                    "Failed to delete data for tenant {TenantId}. It remains scheduled and will be retried.",
-                    tenant.TenantId);
+                    // Honest about the one ambiguous case: a failure during commit may still have
+                    // committed. The next sweep settles it, because a deleted tenant is no longer
+                    // a candidate and its certificate is then already in place.
+                    "Deleting tenant {TenantId} failed. The transaction was rolled back unless the failure occurred during commit; the tenant will be re-checked on the next sweep. Correlation {CorrelationId}.",
+                    tenant.TenantId,
+                    correlationId);
             }
         }
 

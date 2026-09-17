@@ -23,14 +23,7 @@ if (!string.IsNullOrWhiteSpace(keyVaultUri))
     builder.Configuration.AddAzureKeyVault(new Uri(keyVaultUri), new DefaultAzureCredential());
 }
 
-var logger = new LoggerConfiguration()
-    .ReadFrom.Configuration(builder.Configuration)
-    .Enrich.FromLogContext()
-    .Enrich.With<RedactionEnricher>()
-    .WriteTo.Console(formatProvider: CultureInfo.InvariantCulture)
-    .CreateLogger();
-
-builder.Services.AddSerilog(logger);
+builder.Services.AddMlcpSerilog(builder.Configuration);
 
 var identityOptions = new MlcpIdentityOptions
 {

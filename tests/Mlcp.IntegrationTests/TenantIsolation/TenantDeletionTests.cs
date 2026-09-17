@@ -1,10 +1,10 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Mlcp.Domain.Audit;
-using Mlcp.Domain.Capabilities;
-using Mlcp.Domain.Sync;
+using Mlcp.Domain.Common;
 using Mlcp.Domain.Tenancy;
 using Mlcp.IntegrationTests.Infrastructure;
+using Mlcp.Persistence.Rls;
 using Mlcp.Persistence.Stores;
 using Mlcp.Shared.Tenancy;
 using Xunit;
@@ -12,20 +12,24 @@ using Xunit;
 namespace Mlcp.IntegrationTests.TenantIsolation;
 
 /// <summary>
-/// P0-11: deleting a tenant removes all rows across all tables, verified against a real
-/// database, and leaves an audit certificate behind.
+/// P0-11 and ADR-019: deleting a tenant removes every row in every table, in one transaction,
+/// together with the certificate that records it. Verified against a real database.
 /// </summary>
 /// <remarks>
-/// This has to run against SQL Server rather than a fake. The claim being tested is about what
-/// remains in the database after a set-based delete inside a transaction, which a substitute
-/// store cannot answer — and a promise to a departing customer that their data is gone is not
-/// one to verify against a mock.
+/// This has to run against SQL Server rather than a fake. Three of the claims tested depend on
+/// the real database's behaviour: what remains after a set-based delete inside a transaction,
+/// how two sweeps contend for a row lock, and what a unique index refuses. A substitute store
+/// cannot answer any of them.
 /// </remarks>
 [Collection(SqlServerCollection.Name)]
 [Trait("Category", "TenantIsolation")]
 public class TenantDeletionTests
 {
-    private static readonly DateTimeOffset Now = new(2026, 9, 2, 9, 0, 0, TimeSpan.Zero);
+    /// <summary>
+    /// The sweep's clock. A tenant seeded as disconnected 31 days before this, with a 30-day
+    /// grace period, is one day overdue.
+    /// </summary>
+    private static readonly DateTimeOffset SweepTime = TenantSeed.Now;
 
     private readonly SqlServerFixture _fixture;
 
@@ -34,116 +38,229 @@ public class TenantDeletionTests
         _fixture = fixture;
     }
 
-    /// <summary>Creates a tenant with at least one row in every tenant-scoped table.</summary>
-    private async Task<Guid> SeedFullTenantAsync()
+    private async Task<Guid> SeedDueTenantAsync()
     {
         var tenantId = Guid.NewGuid();
-
-        await using var system = _fixture.CreateContext(FixedTenantContext.System);
-
-        var tenant = Tenant.Register(tenantId, $"Tenant {tenantId:N}", "example.test", "westeurope", Now);
-        tenant.ConfirmConsent(Guid.NewGuid(), Now);
-        tenant.Activate(Now);
-        tenant.BeginGracePeriod(Now.AddDays(-31), TimeSpan.FromDays(30));
-        system.Tenants.Add(tenant);
-
-        system.AppUsers.Add(AppUser.Create(tenantId, Guid.NewGuid(), "a@example.test", "A", AppRole.Owner, Now));
-        system.OnboardingSteps.Add(OnboardingStep.Pending(tenantId, OnboardingStepName.CapabilityDiscovery, Now));
-        system.PendingConsentRequests.Add(PendingConsentRequest.Create(
-            tenantId, Guid.NewGuid(), "a@example.test", "admin@example.test", TimeSpan.FromDays(14), Now));
-        system.TenantCapabilityProfiles.Add(TenantCapabilityProfile.Undiscovered(tenantId, Now));
-        system.SyncRuns.Add(SyncRun.Start(tenantId, SyncJobType.LicenseSkuSync, "corr", Now));
-        system.AuditLogs.Add(AuditLog.ForSystem(
-            tenantId, AuditAction.TenantConnected, nameof(Tenant), tenantId.ToString(), AuditOutcome.Succeeded, "corr", Now));
-
-        await system.SaveChangesAsync();
-
+        await TenantSeed.SeedAsync(_fixture, tenantId, disconnectedDaysAgo: 31);
         return tenantId;
     }
 
-    [RequiresDockerFact]
-    public async Task Deleting_a_tenant_removes_every_row_it_owns()
+    private TenantDeletionStore Store(string? databaseUser = null)
+        => new(new TestSystemDbContextFactory(_fixture, databaseUser));
+
+    private async Task<Dictionary<string, long>> CountRowsAsync(Guid tenantId)
     {
-        var tenantId = await SeedFullTenantAsync();
-        var store = new TenantDeletionStore(new TestSystemDbContextFactory(_fixture));
-
-        var counts = await store.DeleteAllTenantDataAsync(tenantId, CancellationToken.None);
-
-        counts.Values.Sum().Should().BeGreaterThan(0);
-
         await using var system = _fixture.CreateContext(FixedTenantContext.System);
 
-        (await system.Tenants.CountAsync(t => t.TenantId == tenantId)).Should().Be(0);
-        (await system.AppUsers.CountAsync(u => u.TenantId == tenantId)).Should().Be(0);
-        (await system.OnboardingSteps.CountAsync(s => s.TenantId == tenantId)).Should().Be(0);
-        (await system.PendingConsentRequests.CountAsync(r => r.TenantId == tenantId)).Should().Be(0);
-        (await system.TenantCapabilityProfiles.CountAsync(p => p.TenantId == tenantId)).Should().Be(0);
-        (await system.SyncRuns.CountAsync(r => r.TenantId == tenantId)).Should().Be(0);
-        (await system.AuditLogs.CountAsync(a => a.TenantId == tenantId)).Should().Be(0);
+        var counts = new Dictionary<string, long>(StringComparer.Ordinal);
+
+        foreach (var table in TenantRlsScript.TenantScopedTables)
+        {
+            // Table names come from the compiled list, never from input.
+            var sql = "SELECT COUNT_BIG(*) AS Value FROM [dbo].[" + table + "] WHERE [TenantId] = @tenantId";
+
+            counts[table] = await system.Database
+                .SqlQueryRaw<long>(sql, new Microsoft.Data.SqlClient.SqlParameter("@tenantId", tenantId))
+                .SingleAsync();
+        }
+
+        return counts;
+    }
+
+    private async Task<List<DeletionCertificate>> CertificatesForAsync(Guid tenantId)
+    {
+        await using var system = _fixture.CreateContext(FixedTenantContext.System);
+        return await system.DeletionCertificates.Where(c => c.TenantId == tenantId).ToListAsync();
+    }
+
+    [RequiresDockerFact]
+    public async Task Deleting_a_tenant_removes_every_row_it_owns_in_every_table()
+    {
+        var tenantId = await SeedDueTenantAsync();
+        (await CountRowsAsync(tenantId)).Values.Should().OnlyContain(c => c > 0, "the seed covers every table");
+
+        var certificate = await Store().DeleteAllTenantDataAsync(tenantId, SweepTime, "corr-del", CancellationToken.None);
+
+        certificate.Should().NotBeNull();
+        (await CountRowsAsync(tenantId)).Values.Should().OnlyContain(c => c == 0);
+    }
+
+    [RequiresDockerFact]
+    public async Task The_certificate_is_written_with_the_deletion_and_records_what_went()
+    {
+        var tenantId = await SeedDueTenantAsync();
+
+        var certificate = await Store().DeleteAllTenantDataAsync(tenantId, SweepTime, "corr-cert", CancellationToken.None);
+
+        var stored = (await CertificatesForAsync(tenantId)).Should().ContainSingle().Subject;
+        stored.DeletionCertificateId.Should().Be(certificate!.DeletionCertificateId);
+        stored.CorrelationId.Should().Be("corr-cert");
+        stored.DeletedUtc.Should().Be(SweepTime);
+
+        // The disconnect date, not the scheduled deletion date, is what the certificate records.
+        stored.DisconnectedUtc.Should().Be(TenantSeed.Now.AddDays(-31));
+
+        var counts = DomainJson.Deserialize<Dictionary<string, int>>(stored.RowCountsByTable)!;
+        counts.Keys.Should().BeEquivalentTo(TenantRlsScript.TenantScopedTables);
+        counts["Tenant"].Should().Be(1);
+        counts["AppUser"].Should().Be(1);
+        counts["AuditLog"].Should().Be(TenantSeed.AuditRowsPerTenant);
+        counts["SyncRun"].Should().Be(1);
+        counts["OnboardingStep"].Should().Be(1);
+        counts["PendingConsentRequest"].Should().Be(1);
+        counts["TenantCapabilityProfile"].Should().Be(1);
+        stored.RowsDeleted.Should().Be(counts.Values.Sum());
+    }
+
+    [RequiresDockerFact]
+    public async Task The_certificate_carries_the_digest_of_the_audit_log_as_it_was()
+    {
+        var tenantId = await SeedDueTenantAsync();
+
+        List<AuditLog> before;
+
+        await using (var system = _fixture.CreateContext(FixedTenantContext.System))
+        {
+            before = await system.AuditLogs.AsNoTracking().Where(a => a.TenantId == tenantId).ToListAsync();
+        }
+
+        var certificate = await Store().DeleteAllTenantDataAsync(tenantId, SweepTime, "corr-digest", CancellationToken.None);
+
+        certificate!.AuditLogSha256.Should().MatchRegex("^[0-9a-f]{64}$");
+        certificate.AuditLogSha256.Should().Be(AuditLogDigest.Compute(before), "anyone with an export can reproduce it");
+
+        (await CertificatesForAsync(tenantId)).Single().AuditLogSha256.Should().Be(certificate.AuditLogSha256);
     }
 
     [RequiresDockerFact]
     public async Task Deleting_one_tenant_leaves_another_untouched()
     {
-        var doomed = await SeedFullTenantAsync();
-        var survivor = await SeedFullTenantAsync();
+        var doomed = await SeedDueTenantAsync();
+        var survivor = await SeedDueTenantAsync();
+        var survivorBefore = await CountRowsAsync(survivor);
 
-        var store = new TenantDeletionStore(new TestSystemDbContextFactory(_fixture));
-        await store.DeleteAllTenantDataAsync(doomed, CancellationToken.None);
+        await Store().DeleteAllTenantDataAsync(doomed, SweepTime, "corr-one", CancellationToken.None);
 
-        await using var system = _fixture.CreateContext(FixedTenantContext.System);
-
-        (await system.Tenants.CountAsync(t => t.TenantId == survivor)).Should().Be(1);
-        (await system.AppUsers.CountAsync(u => u.TenantId == survivor)).Should().Be(1);
-        (await system.AuditLogs.CountAsync(a => a.TenantId == survivor)).Should().Be(1);
+        (await CountRowsAsync(survivor)).Should().Equal(survivorBefore);
+        (await CertificatesForAsync(survivor)).Should().BeEmpty();
     }
 
     [RequiresDockerFact]
-    public async Task The_counts_returned_match_what_was_actually_removed()
+    public async Task A_tenant_whose_grace_period_has_not_ended_is_not_deleted()
     {
-        // The certificate is built from these numbers, so a count that overstates what went
-        // would put a false claim into a permanent record.
-        var tenantId = await SeedFullTenantAsync();
-        var store = new TenantDeletionStore(new TestSystemDbContextFactory(_fixture));
+        var tenantId = Guid.NewGuid();
+        await TenantSeed.SeedAsync(_fixture, tenantId, disconnectedDaysAgo: 5);
+        var before = await CountRowsAsync(tenantId);
 
-        var counts = await store.DeleteAllTenantDataAsync(tenantId, CancellationToken.None);
+        var certificate = await Store().DeleteAllTenantDataAsync(tenantId, SweepTime, "corr-early", CancellationToken.None);
 
-        counts["Tenant"].Should().Be(1);
-        counts["AppUser"].Should().Be(1);
-        counts["AuditLog"].Should().Be(1);
-        counts["SyncRun"].Should().Be(1);
-        counts["OnboardingStep"].Should().Be(1);
-        counts["PendingConsentRequest"].Should().Be(1);
-        counts["TenantCapabilityProfile"].Should().Be(1);
+        certificate.Should().BeNull();
+        (await CountRowsAsync(tenantId)).Should().Equal(before);
+        (await CertificatesForAsync(tenantId)).Should().BeEmpty();
     }
 
     [RequiresDockerFact]
-    public async Task The_certificate_survives_the_tenant_it_describes()
+    public async Task A_tenant_that_reconnected_after_the_sweep_found_it_is_not_deleted()
     {
-        // The whole point: after deletion we must still be able to show that we deleted it.
-        var tenantId = await SeedFullTenantAsync();
-        var factory = new TestSystemDbContextFactory(_fixture);
-        var store = new TenantDeletionStore(factory);
+        // The race the eligibility re-check exists for: the candidate list is stale by the time
+        // the delete runs.
+        var tenantId = await SeedDueTenantAsync();
+        var store = Store();
 
-        var counts = await store.DeleteAllTenantDataAsync(tenantId, CancellationToken.None);
+        var candidates = await store.FindTenantsDueForDeletionAsync(SweepTime, CancellationToken.None);
+        candidates.Should().Contain(t => t.TenantId == tenantId);
 
-        await store.AddCertificateAsync(
-            DeletionCertificate.Issue(tenantId, "Gone", Now, counts, "corr", Now.AddDays(1)),
-            CancellationToken.None);
+        await using (var system = _fixture.CreateContext(FixedTenantContext.System))
+        {
+            var tenant = await system.Tenants.SingleAsync(t => t.TenantId == tenantId);
+            tenant.CancelDeletion(SweepTime);
+            await system.SaveChangesAsync();
+        }
+
+        var before = await CountRowsAsync(tenantId);
+
+        var certificate = await store.DeleteAllTenantDataAsync(tenantId, SweepTime, "corr-race", CancellationToken.None);
+
+        certificate.Should().BeNull();
+        (await CountRowsAsync(tenantId)).Should().Equal(before);
+        (await CertificatesForAsync(tenantId)).Should().BeEmpty();
+    }
+
+    [RequiresDockerFact]
+    public async Task Deleting_an_already_deleted_tenant_does_nothing()
+    {
+        var tenantId = await SeedDueTenantAsync();
+        var store = Store();
+
+        (await store.DeleteAllTenantDataAsync(tenantId, SweepTime, "corr-first", CancellationToken.None)).Should().NotBeNull();
+        (await store.DeleteAllTenantDataAsync(tenantId, SweepTime, "corr-second", CancellationToken.None)).Should().BeNull();
+
+        (await CertificatesForAsync(tenantId)).Should().ContainSingle().Which.CorrelationId.Should().Be("corr-first");
+    }
+
+    [RequiresDockerFact]
+    public async Task Concurrent_sweeps_delete_once_and_issue_one_certificate()
+    {
+        var tenantId = await SeedDueTenantAsync();
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(i => Task.Run(() =>
+            Store().DeleteAllTenantDataAsync(tenantId, SweepTime, $"corr-concurrent-{i}", CancellationToken.None))));
+
+        results.Where(r => r is not null).Should().ContainSingle();
+        (await CertificatesForAsync(tenantId)).Should().ContainSingle();
+        (await CountRowsAsync(tenantId)).Values.Should().OnlyContain(c => c == 0);
+    }
+
+    [RequiresDockerFact]
+    public async Task The_database_refuses_a_second_certificate_for_the_same_disconnection()
+    {
+        // Belt and braces behind the row lock: even a code path that skipped the lock could not
+        // record the same deletion twice.
+        var tenantId = await SeedDueTenantAsync();
+        var certificate = await Store().DeleteAllTenantDataAsync(tenantId, SweepTime, "corr-unique", CancellationToken.None);
 
         await using var system = _fixture.CreateContext(FixedTenantContext.System);
 
-        var certificate = await system.DeletionCertificates.SingleAsync(c => c.TenantId == tenantId);
-        certificate.RowsDeleted.Should().Be(counts.Values.Sum());
+        system.DeletionCertificates.Add(DeletionCertificate.Issue(
+            tenantId,
+            "Duplicate",
+            certificate!.DisconnectedUtc,
+            new Dictionary<string, int> { ["AuditLog"] = 0 },
+            new string('0', 64),
+            "corr-duplicate",
+            SweepTime));
+
+        var act = async () => await system.SaveChangesAsync();
+
+        await act.Should().ThrowAsync<DbUpdateException>();
     }
 
-    private sealed class TestSystemDbContextFactory : Mlcp.Persistence.ISystemDbContextFactory
+    [RequiresDockerFact]
+    public async Task The_worker_database_role_has_every_right_deletion_needs()
     {
-        private readonly SqlServerFixture _fixture;
+        // Runs the real store as the least-privileged worker user, so a missing grant (or a
+        // lock hint that needs one) fails here rather than in the first production sweep.
+        var tenantId = await SeedDueTenantAsync();
 
-        public TestSystemDbContextFactory(SqlServerFixture fixture) => _fixture = fixture;
+        var certificate = await Store(SqlServerFixture.WorkerUser)
+            .DeleteAllTenantDataAsync(tenantId, SweepTime, "corr-worker", CancellationToken.None);
 
-        public Mlcp.Persistence.MlcpDbContext CreateDbContext()
-            => _fixture.CreateContext(FixedTenantContext.System);
+        certificate.Should().NotBeNull();
+        (await CountRowsAsync(tenantId)).Values.Should().OnlyContain(c => c == 0);
+        (await CertificatesForAsync(tenantId)).Should().ContainSingle();
+    }
+
+    [RequiresDockerFact]
+    public async Task The_web_database_role_cannot_run_a_deletion()
+    {
+        var tenantId = await SeedDueTenantAsync();
+        var before = await CountRowsAsync(tenantId);
+
+        var act = async () => await Store(SqlServerFixture.WebUser)
+            .DeleteAllTenantDataAsync(tenantId, SweepTime, "corr-web", CancellationToken.None);
+
+        // The web user is not in mlcp_system, so the system context sees no tenant at all.
+        (await act()).Should().BeNull();
+        (await CountRowsAsync(tenantId)).Should().Equal(before);
     }
 }
