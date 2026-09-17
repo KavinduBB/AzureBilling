@@ -51,9 +51,22 @@ internal sealed class SyncRunConfiguration : IEntityTypeConfiguration<SyncRun>
         builder.Property(r => r.ContinuationToken).HasColumnType("nvarchar(max)");
         builder.Property(r => r.RowVersion).IsRowVersion();
 
+        // ADR-024: the mode and period a run used, its staged count (the gate's only baseline)
+        // and the resume chain.
+        builder.Property(r => r.LoadMode).HasConversion<string>().HasMaxLength(16).IsRequired();
+        builder.Property(r => r.PeriodKey).HasMaxLength(32);
+
         // Serves both "latest run of this job" for freshness labels and the sync health page.
         builder.HasIndex(r => new { r.TenantId, r.JobType, r.StartedUtc })
             .IsDescending(false, false, true);
+
+        // The gate's baseline lookup and the resume-candidate lookup both filter on tenant, job
+        // and status and take the newest.
+        builder.HasIndex(r => new { r.TenantId, r.JobType, r.Status, r.CompletedUtc })
+            .IsDescending(false, false, false, true);
+
+        // The stuck-run sweeper scans running runs by age across every tenant.
+        builder.HasIndex(r => new { r.Status, r.StartedUtc });
 
         builder.HasOne<Tenant>()
             .WithMany()
