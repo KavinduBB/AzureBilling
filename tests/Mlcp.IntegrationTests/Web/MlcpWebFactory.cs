@@ -290,11 +290,32 @@ public sealed class InMemoryWebRepository : IOnboardingRepository
 
     public Task AddAuditAsync(AuditLog entry, CancellationToken cancellationToken)
     {
-        Audits.Add(entry);
+        lock (Audits)
+        {
+            Audits.Add(entry);
+        }
+
         return Task.CompletedTask;
     }
 
-    public Task SaveChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task SaveChangesAsync(CancellationToken cancellationToken)
+    {
+        // Mimic the identity column, so an attempt row can be resolved once it is "saved".
+        lock (Audits)
+        {
+            foreach (var audit in Audits.Where(a => a.AuditLogId == 0))
+            {
+                AuditLogIdProperty.SetValue(audit, Interlocked.Increment(ref _lastAuditLogId));
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private static readonly System.Reflection.PropertyInfo AuditLogIdProperty =
+        typeof(AuditLog).GetProperty(nameof(AuditLog.AuditLogId))!;
+
+    private long _lastAuditLogId;
 }
 
 public sealed class NoProfileStore(InMemoryWebRepository repository) : ITenantOnboardingStore

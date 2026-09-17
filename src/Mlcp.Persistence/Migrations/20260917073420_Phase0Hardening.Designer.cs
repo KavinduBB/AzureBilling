@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Mlcp.Persistence;
 
@@ -11,9 +12,11 @@ using Mlcp.Persistence;
 namespace Mlcp.Persistence.Migrations
 {
     [DbContext(typeof(MlcpDbContext))]
-    partial class MlcpDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260917073420_Phase0Hardening")]
+    partial class Phase0Hardening
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
