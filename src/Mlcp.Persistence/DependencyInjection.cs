@@ -4,6 +4,7 @@ using Mlcp.Application.Onboarding;
 using Mlcp.Application.Sync;
 using Mlcp.Persistence.Interceptors;
 using Mlcp.Persistence.Stores;
+using Mlcp.Persistence.Sync;
 using Mlcp.Shared.Resilience;
 using Mlcp.Shared.Tenancy;
 
@@ -45,6 +46,9 @@ public static class DependencyInjection
         services.AddScoped<IOnboardingRepository, OnboardingRepository>();
         services.AddScoped<ITenantOnboardingStore, TenantOnboardingStore>();
         services.AddScoped<ISyncRunStore, SyncRunStore>();
+        services.AddScoped<IStagingStore, SqlStagingStore>();
+        services.AddScoped<ISyncGateOverrideStore, SyncGateOverrideStore>();
+        services.AddScoped<ISyncGateContext, SyncGateContext>();
 
         // The scoped signal only ever touches the tenant already in scope. The sync worker
         // replaces it with the system-context one, which can reach any tenant, by calling
