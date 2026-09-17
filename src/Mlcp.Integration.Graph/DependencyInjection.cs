@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Mlcp.Application.Onboarding;
 using Mlcp.Shared.Http;
@@ -8,16 +9,37 @@ public static class DependencyInjection
 {
     public const string HttpClientName = "Graph";
 
+    /// <summary>Configuration key overriding the Graph base address (tests, sovereign clouds).</summary>
+    public const string BaseAddressKey = "Mlcp:MicrosoftApi:GraphBaseAddress";
+
     public static Uri DefaultBaseAddress { get; } = new("https://graph.microsoft.com/");
 
+    /// <summary>Registers the Graph integration, reading the base address from <see cref="BaseAddressKey"/>.</summary>
+    public static IServiceCollection AddGraphIntegration(this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        var configured = configuration[BaseAddressKey];
+        return services.AddGraphIntegration(string.IsNullOrWhiteSpace(configured) ? null : new Uri(configured));
+    }
+
     /// <summary>
-    /// Registers the Graph integration.
+    /// Registers the Graph integration: the probe, the consent verifier and the typed client.
     /// </summary>
     /// <remarks>
-    /// Automatic redirects are turned off. Usage report endpoints answer 302 with a
-    /// pre-authenticated CSV URL, and the default handler would follow it while still carrying
-    /// our <c>Authorization</c> header — sending an Entra bearer token to a storage endpoint
-    /// that neither needs nor should receive it (docs/02-api-reference.md §1.2).
+    /// <para>
+    /// <see cref="HttpClient.Timeout"/> is infinite: the resilience pipeline's per-attempt timeout
+    /// is the only timeout, so a slow attempt is retried rather than failing the whole call
+    /// (ADR-016 rule 6).
+    /// </para>
+    /// <para>
+    /// Automatic redirects are off. Usage report endpoints answer 302 with a pre-authenticated CSV
+    /// URL, and following it would send our bearer token to a storage endpoint (docs/02 §1.2).
+    /// </para>
+    /// <para>
+    /// <see cref="GraphConsentVerifier"/> depends on <see cref="ITenantOnboardingStore"/>, which the
+    /// host registers with persistence.
+    /// </para>
     /// </remarks>
     public static IServiceCollection AddGraphIntegration(this IServiceCollection services, Uri? baseAddress = null)
     {
@@ -26,11 +48,12 @@ public static class DependencyInjection
         services.AddHttpClient<GraphApiClient>(client =>
             {
                 client.BaseAddress = baseAddress ?? DefaultBaseAddress;
-                client.Timeout = TimeSpan.FromSeconds(100);
+                client.Timeout = Timeout.InfiniteTimeSpan;
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 
         services.AddScoped<IGraphCapabilityProbe, GraphCapabilityProbe>();
+        services.AddScoped<IConsentVerifier, GraphConsentVerifier>();
 
         return services;
     }
@@ -41,8 +64,7 @@ public static class DependencyInjection
 /// </summary>
 /// <remarks>
 /// A named subclass rather than a raw named client, so the Graph and ARM clients are distinct
-/// types in the container. Injecting the wrong one would otherwise be a silent misconfiguration
-/// that only surfaced as 404s from the wrong host.
+/// types in the container and cannot be swapped silently.
 /// </remarks>
 public sealed class GraphApiClient : MicrosoftApiClient
 {

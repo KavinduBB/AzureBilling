@@ -1,0 +1,29 @@
+@model Mlcp.Web.Models.DisconnectConfirmViewModel
+@{
+    ViewData["Title"] = "Disconnect your organisation";
+}
+
+@* A confirmation page rather than an inline confirm(): the CSP forbids inline script, and a
+   destructive action deserves a page of its own. *@
+
+<h1>Disconnect @Model.TenantName?</h1>
+
+<div class="alert alert-danger" role="alert">
+    <p class="mb-2"><strong>This stops all synchronisation immediately.</strong></p>
+    <p class="mb-0">
+        All of your organisation's data in MLCP will be permanently deleted in
+        @Model.RetentionDays days. Until then, an administrator can cancel the disconnect and pick up
+        where you left off.
+    </p>
+</div>
+
+<form asp-action="Disconnect" method="post">
+    <div class="form-check mb-3">
+        <input class="form-check-input" type="checkbox" id="confirmed" name="confirmed" value="true" required />
+        <label class="form-check-label" for="confirmed">
+            I understand that our data will be deleted in @Model.RetentionDays days unless the disconnect is cancelled.
+        </label>
+    </div>
+    <button type="submit" class="btn btn-danger">Disconnect this organisation</button>
+    <a class="btn btn-link" asp-action="Index">Keep it connected</a>
+</form>

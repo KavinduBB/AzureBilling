@@ -1,0 +1,9 @@
+{
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000201/providers/Microsoft.Billing/billingProperty/default",
+  "name": "default",
+  "type": "Microsoft.Billing/billingProperty",
+  "properties": {
+    "billingAccountAgreementType": "EnterpriseAgreement",
+    "subscriptionBillingStatus": "Active"
+  }
+}

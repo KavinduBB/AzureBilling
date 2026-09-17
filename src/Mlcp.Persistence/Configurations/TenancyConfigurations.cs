@@ -36,6 +36,9 @@ internal sealed class TenantConfiguration : IEntityTypeConfiguration<Tenant>
         builder.Property(t => t.AgreementTypePrimary).HasConversion<string>().HasMaxLength(32).IsRequired();
         builder.Property(t => t.RowVersion).IsRowVersion();
 
+        // A failure classification and a short code (ADR-016), never a raw response body.
+        builder.Property(t => t.NeedsReconsentReason).HasMaxLength(512);
+
         builder.Property(t => t.Features)
             .HasConversion(
                 features => DomainJson.Serialize(features),
@@ -58,6 +61,9 @@ internal sealed class TenantConfiguration : IEntityTypeConfiguration<Tenant>
         // The deletion job sweeps tenants whose grace period has elapsed.
         builder.HasIndex(t => t.DeleteScheduledUtc).HasFilter("[DeleteScheduledUtc] IS NOT NULL");
         builder.HasIndex(t => t.Status);
+
+        // The worker sweeps tenants whose automatic re-consent probe is due (ADR-016 rule 5).
+        builder.HasIndex(t => t.NextReconsentProbeUtc).HasFilter("[NextReconsentProbeUtc] IS NOT NULL");
     }
 }
 
@@ -90,10 +96,23 @@ internal sealed class PendingConsentRequestConfiguration : IEntityTypeConfigurat
         builder.Property(r => r.Token).HasMaxLength(64).IsRequired();
         builder.Property(r => r.RowVersion).IsRowVersion();
 
+        // Recent send times, for the per-user and per-tenant email limits (ADR-018). Existing
+        // rows migrate with '[]'.
+        builder.Property<string>("SendHistoryJson")
+            .HasColumnName("SendHistory")
+            .HasColumnType("nvarchar(max)")
+            .HasDefaultValue("[]")
+            .IsRequired();
+
+        builder.Ignore(r => r.SendHistory);
+
         // The consent landing page looks a request up by token alone, before any tenant is in
         // scope, so the token must be globally unique rather than unique within a tenant.
         builder.HasIndex(r => r.Token).IsUnique();
         builder.HasIndex(r => new { r.TenantId, r.ExpiresUtc });
+
+        // The rate limits read recent requests per tenant by last send.
+        builder.HasIndex(r => new { r.TenantId, r.LastSentUtc });
 
         builder.HasOne<Tenant>()
             .WithMany()

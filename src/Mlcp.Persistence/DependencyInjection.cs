@@ -4,7 +4,7 @@ using Mlcp.Application.Onboarding;
 using Mlcp.Application.Sync;
 using Mlcp.Persistence.Interceptors;
 using Mlcp.Persistence.Stores;
-using Mlcp.Shared.Resilience;
+using Mlcp.Persistence.Sync;
 using Mlcp.Shared.Tenancy;
 
 namespace Mlcp.Persistence;
@@ -44,19 +44,23 @@ public static class DependencyInjection
 
         services.AddScoped<IOnboardingRepository, OnboardingRepository>();
         services.AddScoped<ITenantOnboardingStore, TenantOnboardingStore>();
-        services.AddScoped<ISyncRunStore, SyncRunStore>();
 
-        // The scoped signal only ever touches the tenant already in scope. The sync worker
-        // replaces it with the system-context one, which can reach any tenant, by calling
-        // AddMlcpSystemPersistence afterwards.
-        services.AddScoped<ITenantReconsentSignal, ScopedTenantReconsentSignal>();
+        // AddScoped (not TryAdd) so it replaces the web host's "unknown" default.
+        services.AddScoped<ITenantDirectoryInfo, TenantDirectoryInfoStore>();
+        services.AddScoped<ISyncRunStore, SyncRunStore>();
+        services.AddScoped<IStagingStore, SqlStagingStore>();
+        services.AddScoped<ISyncGateOverrideStore, SyncGateOverrideStore>();
+        services.AddScoped<ISyncGateContext, SyncGateContext>();
+
+        // There is deliberately no out-of-band re-consent signal any more (ADR-016 rule 2): the
+        // service that owns the tenant aggregate flags it on this same scoped context.
 
         return services;
     }
 
     /// <summary>
-    /// Registers the cross-tenant database access used by the scheduler, the deletion sweep and
-    /// the re-consent signal. Only the sync worker calls this; the web application does not.
+    /// Registers the cross-tenant database access used by the scheduler and the deletion sweep.
+    /// Only the sync worker calls this; the web application does not.
     /// </summary>
     public static IServiceCollection AddMlcpSystemPersistence(this IServiceCollection services, string connectionString)
     {
@@ -64,7 +68,6 @@ public static class DependencyInjection
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
         services.AddSingleton<ISystemDbContextFactory>(_ => new SystemDbContextFactory(connectionString));
-        services.AddSingleton<ITenantReconsentSignal, TenantReconsentSignal>();
 
         return services;
     }

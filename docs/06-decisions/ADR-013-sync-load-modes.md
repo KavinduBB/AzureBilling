@@ -1,5 +1,5 @@
 # ADR-013 — The validation gate applies volume checks to full loads only
-Status: Accepted · Date: 2026-09-02
+Status: Accepted, amended by ADR-024 (per-run mode, period-scoped baselines) · Date: 2026-09-02
 
 ## Context
 

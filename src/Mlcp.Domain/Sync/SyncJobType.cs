@@ -20,6 +20,12 @@ public enum SyncJobType
     SnapshotJob = 14,
     AssociatedTenantDiscovery = 15,
     TenantDeletion = 16,
+
+    /// <summary>Confirms admin consent with an app-only call after the consent callback (ADR-018).</summary>
+    ConsentVerification = 17,
+
+    /// <summary>Floor-only re-probe of a tenant flagged NeedsReconsent (ADR-016 rule 5).</summary>
+    ReconsentProbe = 18,
 }
 
 /// <summary>
@@ -71,9 +77,42 @@ public static class SyncJobTypeExtensions
     };
 
     /// <summary>
-    /// The load mode for a job. Unmapped jobs fall back to <see cref="SyncLoadMode.Full"/>: the
-    /// strictest gate is the safe default when a new job type has not declared its mode.
+    /// Jobs whose healthy runs are expected to take longer than <see cref="DefaultMaxDuration"/>.
+    /// Resource-level cost detail and a full user-assignment load of a very large directory
+    /// both page through hundreds of thousands of rows under Microsoft's throttling limits.
+    /// </summary>
+    private static readonly Dictionary<SyncJobType, TimeSpan> MaxDurations = new()
+    {
+        [SyncJobType.UserAssignmentSync] = TimeSpan.FromHours(4),
+        [SyncJobType.AzureCostDetailSync] = TimeSpan.FromHours(4),
+    };
+
+    /// <summary>The longest a healthy run of an undeclared job is expected to take.</summary>
+    public static readonly TimeSpan DefaultMaxDuration = TimeSpan.FromHours(2);
+
+    /// <summary>
+    /// How many multiples of <see cref="MaxDuration"/> a run may stay <c>Running</c> before the
+    /// stuck-run sweeper treats its worker as dead (ADR-024 §7).
+    /// </summary>
+    public const int StuckRunMultiplier = 2;
+
+    /// <summary>
+    /// The default load mode for a job. A run may request a different mode (ADR-024 §2), for
+    /// example the 30-day full resync of <see cref="SyncJobType.UserAssignmentSync"/>. Unmapped
+    /// jobs fall back to <see cref="SyncLoadMode.Full"/>: the strictest gate is the safe default
+    /// when a new job type has not declared its mode.
     /// </summary>
     public static SyncLoadMode LoadMode(this SyncJobType jobType)
         => LoadModes.TryGetValue(jobType, out var mode) ? mode : SyncLoadMode.Full;
+
+    /// <summary>
+    /// The longest a healthy run of this job is expected to take. Exceeding twice this marks the
+    /// run abandoned; it is not a timeout applied to a live run.
+    /// </summary>
+    public static TimeSpan MaxDuration(this SyncJobType jobType)
+        => MaxDurations.TryGetValue(jobType, out var duration) ? duration : DefaultMaxDuration;
+
+    /// <summary>The age past which a <c>Running</c> run of this job is presumed dead.</summary>
+    public static TimeSpan StuckAfter(this SyncJobType jobType)
+        => jobType.MaxDuration() * StuckRunMultiplier;
 }

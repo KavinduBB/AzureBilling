@@ -10,9 +10,9 @@ namespace Mlcp.Shared.Logging;
 /// <remarks>
 /// Placing redaction in the pipeline rather than at each call site means a secret cannot reach
 /// a sink because one developer forgot. The rendered message is produced from the properties,
-/// so redacting properties also redacts the message for structured sinks. Exception text is
-/// handled separately by <see cref="RedactedExceptionFormatting"/> because Serilog keeps the
-/// exception outside the property bag.
+/// so redacting properties also redacts the message for structured sinks. Exception text and
+/// the message template itself are outside the property bag, so they are redacted by
+/// <see cref="RedactingSink"/>, which <see cref="MlcpSerilog"/> wraps around every sink.
 /// </remarks>
 public sealed class RedactionEnricher : ILogEventEnricher
 {
@@ -26,7 +26,7 @@ public sealed class RedactionEnricher : ILogEventEnricher
 
         foreach (var (name, value) in properties)
         {
-            if (Redact(value) is { } redacted)
+            if (RedactValue(value) is { } redacted)
             {
                 logEvent.AddOrUpdateProperty(new LogEventProperty(name, redacted));
             }
@@ -38,7 +38,7 @@ public sealed class RedactionEnricher : ILogEventEnricher
     /// unchanged. Recurses through sequences and structures so a secret nested inside a
     /// destructured object is caught too.
     /// </summary>
-    private static LogEventPropertyValue? Redact(LogEventPropertyValue value)
+    internal static LogEventPropertyValue? RedactValue(LogEventPropertyValue value)
     {
         switch (value)
         {
@@ -60,7 +60,7 @@ public sealed class RedactionEnricher : ILogEventEnricher
 
                     for (var i = 0; i < sequence.Elements.Count; i++)
                     {
-                        if (Redact(sequence.Elements[i]) is not { } replacement)
+                        if (RedactValue(sequence.Elements[i]) is not { } replacement)
                         {
                             continue;
                         }
@@ -80,7 +80,7 @@ public sealed class RedactionEnricher : ILogEventEnricher
                     {
                         var property = structure.Properties[i];
 
-                        if (Redact(property.Value) is not { } replacement)
+                        if (RedactValue(property.Value) is not { } replacement)
                         {
                             continue;
                         }
@@ -98,7 +98,7 @@ public sealed class RedactionEnricher : ILogEventEnricher
 
                     foreach (var (key, element) in dictionary.Elements)
                     {
-                        if (Redact(element) is not { } replacement)
+                        if (RedactValue(element) is not { } replacement)
                         {
                             continue;
                         }
@@ -117,9 +117,9 @@ public sealed class RedactionEnricher : ILogEventEnricher
 }
 
 /// <summary>
-/// Marker for the exception-side of redaction. Serilog renders <see cref="Exception"/> text
-/// outside the property bag, so sinks must be configured with a formatter that routes
-/// exception text through <see cref="SensitiveDataRedactor"/>.
+/// The exception side of redaction. Serilog keeps the <see cref="Exception"/> outside the
+/// property bag, so <see cref="RedactingSink"/> replaces it with a
+/// <see cref="RedactedException"/> whose text has passed through this method.
 /// </summary>
 public static class RedactedExceptionFormatting
 {

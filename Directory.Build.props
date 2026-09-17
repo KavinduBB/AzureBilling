@@ -1,14 +1,13 @@
 <Project>
 
   <!--
-    Stack note: docs/CLAUDE.md fixes the stack at .NET 9 / C# 13. This solution targets
-    net8.0 because the .NET 9 SDK is not available on the build machine. See
-    docs/06-decisions/ADR-011-net8-target-framework.md. Raising the target is a
-    single edit here plus a package-version bump in Directory.Packages.props.
+    Target framework: net10.0 (LTS, supported to November 2028). See
+    docs/06-decisions/ADR-014-net10-target-framework.md, which supersedes ADR-011.
+    The target is set here only; project files must not repeat it.
   -->
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

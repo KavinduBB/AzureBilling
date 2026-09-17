@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
+  <PropertyGroup>
+    <UserSecretsId>dotnet-Mlcp.Web-5b7d2c1e-8f3a-4e6b-9d27-3c41a8e0f6b2</UserSecretsId>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Mlcp.Application\Mlcp.Application.csproj" />
     <ProjectReference Include="..\Mlcp.Domain\Mlcp.Domain.csproj" />
@@ -11,7 +15,7 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <UserSecretsId>mlcp-web-28d7b28c-3b4c-4728-8a7f-332620d36c33</UserSecretsId>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
@@ -22,11 +26,13 @@
     <PackageReference Include="Serilog.AspNetCore" />
     <PackageReference Include="Serilog.Sinks.Console" />
     <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" />
+    <PackageReference Include="Microsoft.Azure.StackExchangeRedis" />
     <PackageReference Include="Azure.Extensions.AspNetCore.Configuration.Secrets" />
     <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Keys" />
     <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" />
     <PackageReference Include="Azure.Communication.Email" />
     <PackageReference Include="Azure.Identity" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

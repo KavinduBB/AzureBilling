@@ -17,7 +17,7 @@ namespace Mlcp.Persistence.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "8.0.11")
+                .HasAnnotation("ProductVersion", "10.0.12")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -42,6 +42,9 @@ namespace Mlcp.Persistence.Migrations
                         .HasMaxLength(320)
                         .HasColumnType("nvarchar(320)");
 
+                    b.Property<long?>("AttemptAuditLogId")
+                        .HasColumnType("bigint");
+
                     b.Property<string>("CorrelationId")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -49,6 +52,10 @@ namespace Mlcp.Persistence.Migrations
 
                     b.Property<DateTimeOffset>("CreatedUtc")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Detail")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
 
                     b.Property<string>("EntityId")
                         .HasMaxLength(256)
@@ -93,6 +100,10 @@ namespace Mlcp.Persistence.Migrations
 
                     b.HasKey("AuditLogId");
 
+                    b.HasIndex("AttemptAuditLogId")
+                        .IsUnique()
+                        .HasFilter("[AttemptAuditLogId] IS NOT NULL");
+
                     b.HasIndex("CorrelationId");
 
                     b.HasIndex("TenantId", "OccurredUtc")
@@ -108,6 +119,10 @@ namespace Mlcp.Persistence.Migrations
 
                     b.Property<DateTimeOffset>("CreatedUtc")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("DiscoveryDetailJson")
+                        .HasColumnType("nvarchar(max)")
+                        .HasColumnName("DiscoveryDetail");
 
                     b.Property<DateTimeOffset>("LastProfiledUtc")
                         .HasColumnType("datetimeoffset");
@@ -128,11 +143,66 @@ namespace Mlcp.Persistence.Migrations
                     b.Property<DateTimeOffset>("UpdatedUtc")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<string>("VerifiedDomainsJson")
+                        .HasColumnType("nvarchar(max)")
+                        .HasColumnName("VerifiedDomains");
+
                     b.HasKey("TenantId");
 
                     b.HasIndex("NextProfileUtc");
 
                     b.ToTable("TenantCapabilityProfile", (string)null);
+                });
+
+            modelBuilder.Entity("Mlcp.Domain.Sync.SyncGateOverride", b =>
+                {
+                    b.Property<Guid>("SyncGateOverrideId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ApprovedBy")
+                        .IsRequired()
+                        .HasMaxLength(320)
+                        .HasColumnType("nvarchar(320)");
+
+                    b.Property<Guid?>("ConsumedBySyncRunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("ConsumedUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset>("CreatedUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset>("ExpiresUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("JobType")
+                        .IsRequired()
+                        .HasMaxLength(48)
+                        .HasColumnType("nvarchar(48)");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("UpdatedUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("SyncGateOverrideId");
+
+                    b.HasIndex("TenantId", "JobType", "ExpiresUtc")
+                        .HasFilter("[ConsumedBySyncRunId] IS NULL");
+
+                    b.ToTable("SyncGateOverride", (string)null);
                 });
 
             modelBuilder.Entity("Mlcp.Domain.Sync.SyncRun", b =>
@@ -168,13 +238,28 @@ namespace Mlcp.Persistence.Migrations
                         .HasMaxLength(48)
                         .HasColumnType("nvarchar(48)");
 
+                    b.Property<string>("LoadMode")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<string>("PeriodKey")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
                     b.Property<int>("RecordsProcessed")
                         .HasColumnType("int");
+
+                    b.Property<Guid?>("ResumedFromSyncRunId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("rowversion");
+
+                    b.Property<int?>("StagedRowCount")
+                        .HasColumnType("int");
 
                     b.Property<DateTimeOffset>("StartedUtc")
                         .HasColumnType("datetimeoffset");
@@ -183,6 +268,9 @@ namespace Mlcp.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(32)
                         .HasColumnType("nvarchar(32)");
+
+                    b.Property<Guid?>("SupersededBySyncRunId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uniqueidentifier");
@@ -196,8 +284,13 @@ namespace Mlcp.Persistence.Migrations
 
                     b.HasKey("SyncRunId");
 
+                    b.HasIndex("Status", "StartedUtc");
+
                     b.HasIndex("TenantId", "JobType", "StartedUtc")
                         .IsDescending(false, false, true);
+
+                    b.HasIndex("TenantId", "JobType", "Status", "CompletedUtc")
+                        .IsDescending(false, false, false, true);
 
                     b.ToTable("SyncRun", (string)null);
                 });
@@ -218,9 +311,6 @@ namespace Mlcp.Persistence.Migrations
 
                     b.Property<Guid>("EntraObjectId")
                         .HasColumnType("uniqueidentifier");
-
-                    b.Property<bool>("IsSubscriptionManager")
-                        .HasColumnType("bit");
 
                     b.Property<DateTimeOffset?>("LastSeenUtc")
                         .HasColumnType("datetimeoffset");
@@ -265,6 +355,13 @@ namespace Mlcp.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("AuditLogSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("char(64)")
+                        .IsFixedLength();
+
                     b.Property<string>("CorrelationId")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -296,6 +393,10 @@ namespace Mlcp.Persistence.Migrations
                     b.HasIndex("DeletedUtc");
 
                     b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "DisconnectedUtc")
+                        .IsUnique()
+                        .HasDatabaseName("UX_DeletionCertificate_TenantId_DisconnectedUtc");
 
                     b.ToTable("DeletionCertificate", (string)null);
                 });
@@ -411,6 +512,13 @@ namespace Mlcp.Persistence.Migrations
                     b.Property<int>("SendCount")
                         .HasColumnType("int");
 
+                    b.Property<string>("SendHistoryJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("nvarchar(max)")
+                        .HasDefaultValue("[]")
+                        .HasColumnName("SendHistory");
+
                     b.Property<string>("SentToEmail")
                         .IsRequired()
                         .HasMaxLength(320)
@@ -434,6 +542,8 @@ namespace Mlcp.Persistence.Migrations
 
                     b.HasIndex("TenantId", "ExpiresUtc");
 
+                    b.HasIndex("TenantId", "LastSentUtc");
+
                     b.ToTable("PendingConsentRequest", (string)null);
                 });
 
@@ -446,6 +556,9 @@ namespace Mlcp.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(32)
                         .HasColumnType("nvarchar(32)");
+
+                    b.Property<DateTimeOffset?>("ConsentCallbackUtc")
+                        .HasColumnType("datetimeoffset");
 
                     b.Property<Guid?>("ConsentGrantedByObjectId")
                         .HasColumnType("uniqueidentifier");
@@ -463,6 +576,9 @@ namespace Mlcp.Persistence.Migrations
                     b.Property<DateTimeOffset?>("DeleteScheduledUtc")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<DateTimeOffset?>("DisconnectedUtc")
+                        .HasColumnType("datetimeoffset");
+
                     b.Property<string>("DisplayName")
                         .IsRequired()
                         .HasMaxLength(256)
@@ -478,8 +594,21 @@ namespace Mlcp.Persistence.Migrations
                     b.Property<Guid?>("ManagingPartnerTenantId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("NeedsReconsentReason")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<DateTimeOffset?>("NeedsReconsentSinceUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("NextReconsentProbeUtc")
+                        .HasColumnType("datetimeoffset");
+
                     b.Property<Guid?>("OrganizationId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("ReconsentProbeAttempts")
+                        .HasColumnType("int");
 
                     b.Property<string>("Region")
                         .IsRequired()
@@ -504,6 +633,9 @@ namespace Mlcp.Persistence.Migrations
                     b.HasIndex("DeleteScheduledUtc")
                         .HasFilter("[DeleteScheduledUtc] IS NOT NULL");
 
+                    b.HasIndex("NextReconsentProbeUtc")
+                        .HasFilter("[NextReconsentProbeUtc] IS NOT NULL");
+
                     b.HasIndex("OrganizationId");
 
                     b.HasIndex("Status");
@@ -513,6 +645,20 @@ namespace Mlcp.Persistence.Migrations
 
             modelBuilder.Entity("Mlcp.Domain.Audit.AuditLog", b =>
                 {
+                    b.HasOne("Mlcp.Domain.Audit.AuditLog", null)
+                        .WithMany()
+                        .HasForeignKey("AttemptAuditLogId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("Mlcp.Domain.Tenancy.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Mlcp.Domain.Capabilities.TenantCapabilityProfile", b =>
+                {
                     b.HasOne("Mlcp.Domain.Tenancy.Tenant", null)
                         .WithMany()
                         .HasForeignKey("TenantId")
@@ -520,7 +666,7 @@ namespace Mlcp.Persistence.Migrations
                         .IsRequired();
                 });
 
-            modelBuilder.Entity("Mlcp.Domain.Capabilities.TenantCapabilityProfile", b =>
+            modelBuilder.Entity("Mlcp.Domain.Sync.SyncGateOverride", b =>
                 {
                     b.HasOne("Mlcp.Domain.Tenancy.Tenant", null)
                         .WithMany()

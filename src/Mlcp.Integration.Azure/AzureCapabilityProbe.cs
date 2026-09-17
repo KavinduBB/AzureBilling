@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
+using Mlcp.Application.Costs;
 using Mlcp.Application.Onboarding;
 using Mlcp.Domain.Tenancy;
+using Mlcp.Shared.Http;
 using Mlcp.Shared.Identity;
 using Mlcp.Shared.Resilience;
 
@@ -10,40 +12,24 @@ namespace Mlcp.Integration.Azure;
 
 /// <summary>
 /// Probes Azure Resource Manager for subscriptions, their agreement type, and whether Cost
-/// Management will actually answer.
+/// Management answers at subscription scope (rung 3) and at the root management group (rung 2).
 /// </summary>
 /// <remarks>
 /// <para>
-/// Listing subscriptions and querying costs are separate permissions and are probed separately.
-/// Reader lists subscriptions; Cost Management Reader answers queries. Customers routinely
-/// grant one and not the other, and the checklist has to be able to say which
-/// (docs/03-architecture.md §4.1).
+/// Listing subscriptions (Reader) and querying costs (Cost Management Reader) are separate grants
+/// and are probed and classified separately (docs/03 §4.1, ADR-016 rule 1).
 /// </para>
 /// <para>
-/// The cost probe is a single query at the smallest possible shape — one subscription, month
-/// to date, no grouping — because Cost Management is rate limited at roughly four calls per
-/// minute per scope and this runs interactively.
+/// The root management group query is only tried when a classified subscription is EA or MOSP:
+/// management groups are not supported for MCA or CSP subscriptions (ADR-017).
 /// </para>
 /// </remarks>
 public sealed class AzureCapabilityProbe : IAzureCapabilityProbe
 {
-    private const string SubscriptionsUri = "subscriptions?api-version=2022-12-01";
+    internal const string SubscriptionsUri = "subscriptions?api-version=2022-12-01";
 
-    private static string BillingPropertyUri(Guid subscriptionId) => string.Create(
-        CultureInfo.InvariantCulture,
-        $"subscriptions/{subscriptionId}/providers/Microsoft.Billing/billingProperty/default?api-version=2024-04-01");
-
-    private static string CostQueryUri(Guid subscriptionId) => string.Create(
-        CultureInfo.InvariantCulture,
-        $"subscriptions/{subscriptionId}/providers/Microsoft.CostManagement/query?api-version=2024-08-01");
-
-    /// <summary>Cap on how many subscriptions get a billing-property lookup during onboarding.</summary>
-    /// <remarks>
-    /// A large enterprise can hold hundreds. The agreement type is a tenant-level fact in
-    /// practice, so a sample answers the classification question; the full set is established
-    /// later by the scheduled sync rather than while a user waits on a page.
-    /// </remarks>
-    private const int MaxSubscriptionsToClassify = 10;
+    /// <summary>Cap on billing-property lookups per discovery; the full set is the sync's job.</summary>
+    internal const int MaxSubscriptionsToClassify = 10;
 
     private readonly AzureApiClient _client;
     private readonly ILogger<AzureCapabilityProbe> _logger;
@@ -54,103 +40,138 @@ public sealed class AzureCapabilityProbe : IAzureCapabilityProbe
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<ArmProbeResult> ProbeAsync(Guid tenantId, CancellationToken cancellationToken)
-    {
-        var listing = await _client.GetJsonOrDefaultAsync<ArmCollection<SubscriptionResource>>(
-            tenantId, MicrosoftProvider.ResourceManager, TokenAudience.ResourceManager, SubscriptionsUri, cancellationToken)
-            .ConfigureAwait(false);
+    internal static string BillingPropertyUri(Guid subscriptionId) => string.Create(
+        CultureInfo.InvariantCulture,
+        $"subscriptions/{subscriptionId:D}/providers/Microsoft.Billing/billingProperty/default?api-version=2024-04-01");
 
-        if (listing?.Value is not { Count: > 0 } subscriptions)
+    public async Task<ArmProbeResult> ProbeAsync(ProbeContext context, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var listing = await _client.ProbeAsync<ArmCollection<SubscriptionResource>>(
+            new MicrosoftRequest(context.TenantId, MicrosoftProvider.ResourceManager, TokenAudience.ResourceManager, SubscriptionsUri)
+            {
+                ConsentCallbackUtc = context.ConsentCallbackUtc,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        var listOutcome = ProbeCallOutcome.From(listing);
+
+        if (!listing.Succeeded)
         {
-            return ArmProbeResult.NotReachable;
+            return new ArmProbeResult(
+                [],
+                CostManagementQueryable: false,
+                SubscriptionList: listOutcome,
+                SubscriptionCostQuery: ProbeCallOutcome.NotAttempted,
+                RootManagementGroupCostQuery: ProbeCallOutcome.NotAttempted);
         }
 
-        var probes = new List<AzureSubscriptionProbe>(subscriptions.Count);
+        var visible = (listing.Value?.Value ?? [])
+            .Where(s => Guid.TryParse(s.SubscriptionId, out _))
+            .ToList();
 
-        foreach (var subscription in subscriptions)
+        var probes = new List<AzureSubscriptionProbe>(visible.Count);
+
+        foreach (var subscription in visible)
         {
-            if (!Guid.TryParse(subscription.SubscriptionId, out var subscriptionId))
+            var subscriptionId = Guid.Parse(subscription.SubscriptionId!);
+            var displayName = subscription.DisplayName ?? subscriptionId.ToString();
+
+            if (probes.Count >= MaxSubscriptionsToClassify)
             {
+                probes.Add(new AzureSubscriptionProbe(
+                    subscriptionId, displayName, AgreementType.NotDiscovered, IsAzurePlan: null, BillingProperty: ProbeCallOutcome.NotAttempted));
                 continue;
             }
 
-            var (agreementType, isAzurePlan) = probes.Count < MaxSubscriptionsToClassify
-                ? await ClassifyAsync(tenantId, subscriptionId, cancellationToken).ConfigureAwait(false)
-                : (AgreementType.NotDiscovered, true);
-
-            probes.Add(new AzureSubscriptionProbe(
-                subscriptionId,
-                subscription.DisplayName ?? subscriptionId.ToString(),
-                agreementType,
-                isAzurePlan));
+            probes.Add(await ClassifyAsync(context, subscriptionId, displayName, cancellationToken).ConfigureAwait(false));
         }
 
-        var costQueryable = probes.Count > 0
-            && await CanQueryCostAsync(tenantId, probes[0].SubscriptionId, cancellationToken).ConfigureAwait(false);
+        var costQuery = ProbeCallOutcome.NotAttempted;
+        var rootQuery = ProbeCallOutcome.NotAttempted;
+
+        if (probes.Count > 0)
+        {
+            costQuery = ProbeCallOutcome.From(await _client.ProbeAsync(
+                CostQueryProbe.Request(context.TenantId, CostScopeResolver.SubscriptionScope(probes[0].SubscriptionId), context.ConsentCallbackUtc),
+                cancellationToken).ConfigureAwait(false));
+
+            if (probes.Any(p => p.AgreementType is AgreementType.Ea or AgreementType.Mosa))
+            {
+                rootQuery = ProbeCallOutcome.From(await _client.ProbeAsync(
+                    CostQueryProbe.Request(context.TenantId, CostScopeResolver.RootManagementGroupScope(context.TenantId), context.ConsentCallbackUtc),
+                    cancellationToken).ConfigureAwait(false));
+            }
+        }
 
         _logger.LogInformation(
-            "ARM probe for tenant {TenantId}: {SubscriptionCount} subscription(s), cost queryable {CostQueryable}.",
-            tenantId,
+            "ARM probe for tenant {TenantId}: {SubscriptionCount} subscription(s), subscription cost query {CostQuery}, root management group query {RootQuery}.",
+            context.TenantId,
             probes.Count,
-            costQueryable);
+            costQuery.Describe(),
+            rootQuery.Describe());
 
-        return new ArmProbeResult(probes, costQueryable);
+        return new ArmProbeResult(
+            probes,
+            CostManagementQueryable: costQuery.Succeeded,
+            SubscriptionList: listOutcome,
+            SubscriptionCostQuery: costQuery,
+            RootManagementGroupCostQuery: rootQuery,
+            TotalSubscriptionCount: probes.Count);
     }
 
-    private async Task<(AgreementType AgreementType, bool IsAzurePlan)> ClassifyAsync(
-        Guid tenantId,
+    private async Task<AzureSubscriptionProbe> ClassifyAsync(
+        ProbeContext context,
         Guid subscriptionId,
+        string displayName,
         CancellationToken cancellationToken)
     {
-        var uri = BillingPropertyUri(subscriptionId);
-
-        var property = await _client.GetJsonOrDefaultAsync<BillingPropertyResource>(
-            tenantId, MicrosoftProvider.ResourceManager, TokenAudience.ResourceManager, uri, cancellationToken)
-            .ConfigureAwait(false);
-
-        var agreement = MapAgreementType(property?.Properties?.BillingAccountAgreementType);
-
-        // A CSP subscription with no billing profile is the classic offer rather than an Azure
-        // Plan, and exposes no cost data at all until the customer migrates (docs/01 §5.8).
-        var isAzurePlan = agreement != AgreementType.Mpa
-            || !string.IsNullOrWhiteSpace(property?.Properties?.BillingProfileId);
-
-        return (agreement, isAzurePlan);
-    }
-
-    private async Task<bool> CanQueryCostAsync(Guid tenantId, Guid subscriptionId, CancellationToken cancellationToken)
-    {
-        var uri = CostQueryUri(subscriptionId);
-
-        var body = new
-        {
-            type = "ActualCost",
-            timeframe = "MonthToDate",
-            dataset = new
+        var response = await _client.ProbeAsync<BillingPropertyResource>(
+            new MicrosoftRequest(context.TenantId, MicrosoftProvider.AzureBilling, TokenAudience.ResourceManager, BillingPropertyUri(subscriptionId))
             {
-                granularity = "None",
-                aggregation = new
-                {
-                    totalCost = new { name = "Cost", function = "Sum" },
-                },
+                ConsentCallbackUtc = context.ConsentCallbackUtc,
             },
-        };
+            cancellationToken).ConfigureAwait(false);
 
-        using var response = await _client.PostJsonAsync(
-            tenantId, MicrosoftProvider.CostManagement, TokenAudience.ResourceManager, uri, body, cancellationToken)
-            .ConfigureAwait(false);
+        var outcome = ProbeCallOutcome.From(response);
 
-        return response.IsSuccessStatusCode;
+        if (!response.Succeeded)
+        {
+            return new AzureSubscriptionProbe(subscriptionId, displayName, AgreementType.NotDiscovered, IsAzurePlan: null, BillingProperty: outcome);
+        }
+
+        var properties = response.Value?.Properties;
+        var agreement = MapAgreementType(properties?.BillingAccountAgreementType);
+
+        return new AzureSubscriptionProbe(
+            subscriptionId,
+            displayName,
+            agreement,
+            IsAzurePlan(agreement, properties?.BillingProfileId),
+            properties?.BillingProfileId,
+            outcome);
     }
 
     /// <summary>
-    /// Maps Microsoft's agreement strings onto our enum.
+    /// Whether the subscription is on an Azure plan rather than the classic CSP offer.
     /// </summary>
     /// <remarks>
-    /// An unrecognised value maps to <see cref="AgreementType.Unknown"/>, never to a guess.
-    /// Guessing MCA for an unfamiliar string would promise a customer prices and lifecycle
-    /// operations that then fail.
+    /// A partner (MPA) subscription with no billing profile is the classic CSP offer, which exposes
+    /// no cost data (docs/01 §5.8). Any other recognised agreement is not classic CSP. An
+    /// unrecognised or missing agreement is unknown, and stays null (CLAUDE.md rule 11).
     /// </remarks>
+    internal static bool? IsAzurePlan(AgreementType agreement, string? billingProfileId) => agreement switch
+    {
+        AgreementType.Mpa => !string.IsNullOrWhiteSpace(billingProfileId),
+        AgreementType.Mca or AgreementType.Ea or AgreementType.Mosa => true,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Maps Microsoft's agreement strings onto our enum. Unrecognised values map to
+    /// <see cref="AgreementType.Unknown"/>, never to a guess.
+    /// </summary>
     internal static AgreementType MapAgreementType(string? agreementType) => agreementType switch
     {
         "MicrosoftCustomerAgreement" => AgreementType.Mca,
@@ -161,7 +182,7 @@ public sealed class AzureCapabilityProbe : IAzureCapabilityProbe
         _ => AgreementType.Unknown,
     };
 
-    private sealed record ArmCollection<T>
+    internal sealed record ArmCollection<T>
     {
         [JsonPropertyName("value")]
         public IReadOnlyList<T>? Value { get; init; }
@@ -170,7 +191,7 @@ public sealed class AzureCapabilityProbe : IAzureCapabilityProbe
         public string? NextLink { get; init; }
     }
 
-    private sealed record SubscriptionResource
+    internal sealed record SubscriptionResource
     {
         public string? SubscriptionId { get; init; }
 
@@ -179,12 +200,12 @@ public sealed class AzureCapabilityProbe : IAzureCapabilityProbe
         public string? State { get; init; }
     }
 
-    private sealed record BillingPropertyResource
+    internal sealed record BillingPropertyResource
     {
         public BillingPropertyProperties? Properties { get; init; }
     }
 
-    private sealed record BillingPropertyProperties
+    internal sealed record BillingPropertyProperties
     {
         public string? BillingAccountAgreementType { get; init; }
 

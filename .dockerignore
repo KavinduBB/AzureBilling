@@ -1,0 +1,33 @@
+# Build context is the repository root for every image (src/*/Dockerfile*).
+# Keep it small, and never send local secrets or build output into an image.
+
+**/bin
+**/obj
+**/*.user
+**/*.suo
+**/TestResults
+**/.vs
+**/.vscode
+**/.idea
+
+.git
+.gitignore
+.gitattributes
+.github
+.vs
+.claude
+_archive
+artifacts
+tests/
+docs/
+
+# Local secrets and settings must never reach an image.
+**/appsettings.Development.json
+**/appsettings.Local.json
+**/.env
+**/*.pfx
+**/*.snk
+
+# Infrastructure is not needed, except the SQL scripts used by the migration image.
+infra/*
+!infra/sql/

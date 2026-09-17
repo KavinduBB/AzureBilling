@@ -25,6 +25,13 @@ dotnet_diagnostic.CA1716.severity = none
 [*.{csproj,props,targets,json,yml,yaml,bicep}]
 indent_size = 2
 
+# CA1873 (new in the .NET 10 analyzers) flags log arguments that box or compute when the level
+# may be disabled. The cost is negligible at this workload's log volume, and the fix everywhere
+# is a move to [LoggerMessage] source generation, tracked as backlog in ADR-014 rather than
+# applied piecemeal. Kept visible as a suggestion so new code can adopt the generator.
+[*.cs]
+dotnet_diagnostic.CA1873.severity = suggestion
+
 [*.{sln}]
 end_of_line = crlf
 indent_style = tab

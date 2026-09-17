@@ -17,8 +17,20 @@ public enum TenantStatus
     /// <summary>Disconnected by the customer; data retained until <c>DeleteScheduledUtc</c>.</summary>
     GracePeriod = 4,
 
-    /// <summary>Hard-deleted. Row retained only to satisfy the audit certificate.</summary>
+    /// <summary>
+    /// Transient in-memory marker only: deletion removes the tenant row, and the
+    /// <c>DeletionCertificate</c> is the durable record (ADR-019).
+    /// </summary>
     Deleted = 5,
+
+    /// <summary>Someone from the tenant has signed in; no admin consent yet (docs/03 §3).</summary>
+    NotConnected = 6,
+
+    /// <summary>
+    /// An admin returned from the consent screen; waiting for an app-only call to confirm it
+    /// (service-principal propagation, ADR-018).
+    /// </summary>
+    ConsentPendingVerification = 7,
 }
 
 /// <summary>
@@ -47,6 +59,12 @@ public enum AgreementType
 
     /// <summary>Discovery ran but could not classify the tenant.</summary>
     Unknown = 6,
+
+    /// <summary>
+    /// The agreement cannot be seen with the grants we hold (no Azure or billing visibility).
+    /// Not evidence of MOSA (ADR-020).
+    /// </summary>
+    Undetermined = 7,
 }
 
 /// <summary>Steps of the onboarding state machine. Persisted one row per tenant per step.</summary>
@@ -71,19 +89,25 @@ public enum OnboardingStepStatus
 }
 
 /// <summary>In-application role, distinct from any Microsoft role (docs/03-architecture.md §4.4).</summary>
+/// <remarks>
+/// The Phase 5 write role is deliberately absent. <c>SubscriptionManager</c> is an Entra app role
+/// that arrives in the token's <c>roles</c> claim and is never stored here, so nothing inside
+/// MLCP can grant write capability (ADR-023). Value 4 is retired and must not be reused.
+/// </remarks>
 public enum AppRole
 {
     Unknown = 0,
 
-    /// <summary>Full read, manages application users and settings.</summary>
+    /// <summary>
+    /// Full read, manages application users and settings. Derived at every sign-in from the
+    /// token's <c>wids</c> claim (a directory role that can grant tenant-wide consent), never
+    /// granted by MLCP (ADR-018).
+    /// </summary>
     Owner = 1,
 
     /// <summary>Full read plus manual price entry.</summary>
     Analyst = 2,
 
-    /// <summary>Dashboards only.</summary>
+    /// <summary>Dashboards only. The default for everyone who is not a directory admin.</summary>
     Viewer = 3,
-
-    /// <summary>Phase 5 write operations. Always additional to a read role.</summary>
-    SubscriptionManager = 4,
 }

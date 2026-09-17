@@ -1,5 +1,5 @@
 # ADR-011 — Target net8.0 instead of the net9.0 named in CLAUDE.md
-Status: Accepted · Date: 2026-09-02
+Status: Superseded by ADR-014 · Date: 2026-09-02
 
 ## Context
 

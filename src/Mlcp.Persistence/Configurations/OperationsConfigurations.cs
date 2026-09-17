@@ -25,6 +25,23 @@ internal sealed class TenantCapabilityProfileConfiguration : IEntityTypeConfigur
 
         builder.Ignore(p => p.Statuses);
 
+        // Verified domains from GET /organization, used to validate consent-request recipients
+        // (ADR-018). A JSON array; null until the first successful organization probe.
+        builder.Property<string?>("VerifiedDomainsJson")
+            .HasColumnName("VerifiedDomains")
+            .HasColumnType("nvarchar(max)")
+            .IsRequired(false);
+
+        builder.Ignore(p => p.VerifiedDomains);
+
+        // Cost scope rung and per-subscription agreements (ADR-017). JSON; null until discovered.
+        builder.Property<string?>("DiscoveryDetailJson")
+            .HasColumnName("DiscoveryDetail")
+            .HasColumnType("nvarchar(max)")
+            .IsRequired(false);
+
+        builder.Ignore(p => p.DiscoveryDetail);
+
         // The discovery scheduler sweeps profiles whose next run is due.
         builder.HasIndex(p => p.NextProfileUtc);
 
@@ -51,9 +68,22 @@ internal sealed class SyncRunConfiguration : IEntityTypeConfiguration<SyncRun>
         builder.Property(r => r.ContinuationToken).HasColumnType("nvarchar(max)");
         builder.Property(r => r.RowVersion).IsRowVersion();
 
+        // ADR-024: the mode and period a run used, its staged count (the gate's only baseline)
+        // and the resume chain.
+        builder.Property(r => r.LoadMode).HasConversion<string>().HasMaxLength(16).IsRequired();
+        builder.Property(r => r.PeriodKey).HasMaxLength(32);
+
         // Serves both "latest run of this job" for freshness labels and the sync health page.
         builder.HasIndex(r => new { r.TenantId, r.JobType, r.StartedUtc })
             .IsDescending(false, false, true);
+
+        // The gate's baseline lookup and the resume-candidate lookup both filter on tenant, job
+        // and status and take the newest.
+        builder.HasIndex(r => new { r.TenantId, r.JobType, r.Status, r.CompletedUtc })
+            .IsDescending(false, false, false, true);
+
+        // The stuck-run sweeper scans running runs by age across every tenant.
+        builder.HasIndex(r => new { r.Status, r.StartedUtc });
 
         builder.HasOne<Tenant>()
             .WithMany()
@@ -84,17 +114,57 @@ internal sealed class AuditLogConfiguration : IEntityTypeConfiguration<AuditLog>
         builder.Property(a => a.FinancialImpactAmount).HasColumnType("decimal(19,4)");
         builder.Property(a => a.FinancialImpactCurrency).HasMaxLength(3).IsFixedLength();
 
-        // Append-only: no RowVersion, because nothing contends to update an audit row. The
-        // single permitted mutation, resolving an attempted outcome, is last-writer-wins by
-        // design and is itself performed once by the code path that wrote the row.
+        builder.Property(a => a.Detail).HasMaxLength(AuditLog.MaxDetailLength);
+
+        // Append-only (ADR-019): rows are never updated, so there is no concurrency token.
         builder.Ignore(a => a.RowVersion);
 
         builder.HasIndex(a => new { a.TenantId, a.OccurredUtc }).IsDescending(false, true);
         builder.HasIndex(a => a.CorrelationId);
 
+        // An outcome row points at its attempt. The filtered unique index allows at most one
+        // outcome per attempt, so AuditQueries.WithOutcome can never duplicate an action.
+        builder.HasIndex(a => a.AttemptAuditLogId)
+            .IsUnique()
+            .HasFilter("[AttemptAuditLogId] IS NOT NULL");
+
+        builder.HasOne<AuditLog>()
+            .WithMany()
+            .HasForeignKey(a => a.AttemptAuditLogId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+        // No cascade (ADR-019): deleting a tenant row must never silently take its audit
+        // history with it. TenantDeletionStore deletes audit rows explicitly, after taking the
+        // digest that goes into the certificate.
         builder.HasOne<Tenant>()
             .WithMany()
             .HasForeignKey(a => a.TenantId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.NoAction);
+    }
+}
+
+/// <summary>
+/// The deletion-integrity part of the <see cref="DeletionCertificate"/> mapping. The basic
+/// mapping is in <c>DeletionCertificateConfiguration</c>. EF applies both, and they do not
+/// overlap.
+/// </summary>
+internal sealed class DeletionCertificateIntegrityConfiguration : IEntityTypeConfiguration<DeletionCertificate>
+{
+    public void Configure(EntityTypeBuilder<DeletionCertificate> builder)
+    {
+        builder.Property(c => c.AuditLogSha256)
+            .HasMaxLength(64)
+            .IsUnicode(false)
+            .IsFixedLength()
+            .IsRequired();
+
+        // One certificate per period of connection. Two deletion sweeps racing on the same
+        // tenant already serialise on the tenant row lock. If that ever failed, this index
+        // would still reject the second certificate, rolling back its deletion with it. A
+        // tenant that reconnects and leaves again has a new DisconnectedUtc, so it can still
+        // get a second certificate.
+        builder.HasIndex(c => new { c.TenantId, c.DisconnectedUtc })
+            .IsUnique()
+            .HasDatabaseName("UX_DeletionCertificate_TenantId_DisconnectedUtc");
     }
 }

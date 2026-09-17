@@ -1,11 +1,35 @@
 @{
     ViewData["Title"] = "Usage insights and the privacy setting";
+    var canConnect = ViewData["CanConnectUsageInsights"] is true;
 }
 
 <h1>Usage insights and the privacy setting</h1>
 
-<p class="lead">Usage insights need a separate, optional consent: <strong>Read all usage
-reports</strong>. It is not part of connecting your organisation.</p>
+<p class="lead">Usage insights use a <strong>separate application</strong>,
+<strong>MLCP Usage Insights</strong>, with one permission: <strong>Read all usage reports</strong>.
+It is not part of connecting your organisation, and removing it never affects the main
+connection.</p>
+
+<h2 class="h5">Turning it on</h2>
+<ol>
+    <li>Connect your organisation first.</li>
+    <li>A Global Administrator or Privileged Role Administrator selects
+        <strong>Connect MLCP Usage Insights</strong> below or on the connection status page.</li>
+    <li>Microsoft's consent screen shows the application <strong>MLCP Usage Insights</strong> and the
+        single permission it asks for. Accept it.</li>
+    <li>Your organisation will then list two enterprise applications: <strong>MLCP</strong> and
+        <strong>MLCP Usage Insights</strong>. To turn usage insights off later, remove only the
+        second one.</li>
+</ol>
+
+@if (canConnect)
+{
+    <form asp-controller="Onboarding" asp-action="ConnectUsageInsights" method="post" class="mb-4">
+        <button type="submit" class="btn btn-primary">Connect MLCP Usage Insights</button>
+    </form>
+}
+
+<h2 class="h5">The privacy setting</h2>
 
 <p>
     By default Microsoft hides user names in usage reports. We can show <strong>how many</strong>

@@ -16,7 +16,8 @@
               "RequiresSession": true
             }
           }
-        ]
+        ],
+        "Topics": []
       }
     ],
     "Logging": {

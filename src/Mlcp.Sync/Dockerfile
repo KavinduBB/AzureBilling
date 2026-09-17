@@ -1,7 +1,7 @@
 # Build context is the repository root:
 #   docker build -f src/Mlcp.Sync/Dockerfile -t mlcp-sync .
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0-noble AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS build
 WORKDIR /src
 
 COPY Directory.Build.props Directory.Packages.props ./
@@ -20,7 +20,7 @@ COPY . .
 RUN dotnet publish src/Mlcp.Sync/Mlcp.Sync.csproj -c Release -o /app --no-restore
 
 # The runtime image, not aspnet: the worker serves no HTTP and has no ingress.
-FROM mcr.microsoft.com/dotnet/runtime:8.0-noble AS runtime
+FROM mcr.microsoft.com/dotnet/runtime:10.0-noble AS runtime
 WORKDIR /app
 
 USER $APP_UID

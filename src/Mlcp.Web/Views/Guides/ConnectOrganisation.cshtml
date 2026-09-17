@@ -4,32 +4,13 @@
 
 <h1>Connect your organisation</h1>
 
-<p class="lead"><strong>Who can do this:</strong> a Global Administrator or Privileged Role
-Administrator in your Microsoft Entra tenant.</p>
+<p class="lead"><strong>Who can do this:</strong> a <strong>Global Administrator</strong> or
+<strong>Privileged Role Administrator</strong> in your Microsoft Entra tenant. MLCP checks the role
+when you sign in; if you were given it a moment ago, sign out and in again.</p>
 
 <h2 class="h5">What we ask for and why</h2>
 
-<table class="table align-middle">
-    <thead>
-        <tr>
-            <th scope="col">Permission</th>
-            <th scope="col">What it lets us read</th>
-            <th scope="col">What it does not do</th>
-        </tr>
-    </thead>
-    <tbody>
-        <tr>
-            <td>Read organisation information</td>
-            <td>Your purchased licences and subscription renewal dates</td>
-            <td>Nothing about individual users</td>
-        </tr>
-        <tr>
-            <td>Read all users' basic profiles</td>
-            <td>Which licences are assigned to which people, and whether accounts are active</td>
-            <td>Cannot read email, files, messages or passwords; cannot change anything</td>
-        </tr>
-    </tbody>
-</table>
+<partial name="~/Views/Onboarding/_PermissionsTable.cshtml" />
 
 <p>
     We never buy, assign or remove licences with these permissions. You can revoke access at any
@@ -39,15 +20,17 @@ Administrator in your Microsoft Entra tenant.</p>
 
 <h2 class="h5">Steps</h2>
 <ol>
-    <li>Click <strong>Connect as administrator</strong>.</li>
+    <li>On the connection page, confirm the region your organisation's data will be stored in.</li>
+    <li>Click <strong>Review permissions and connect</strong>.</li>
     <li>Sign in with your admin account. Multi-factor authentication may be required.</li>
     <li>Review the permissions and click <strong>Accept</strong>.</li>
-    <li>You will return here. Discovery takes one to two minutes.</li>
+    <li>You will return to MLCP. Confirming the connection with Microsoft and discovering what your
+        agreement makes available usually takes a few minutes.</li>
 </ol>
 
 <p class="text-muted">
-    <strong>If you are not an administrator:</strong> use <em>Send request to my admin</em> and we
-    will email them this page with a one-click link.
+    <strong>If you are not an administrator:</strong> use <em>Ask my administrator</em> on the
+    connection page and we will email them a link explaining the request.
 </p>
 
 <a class="btn btn-primary" asp-controller="Onboarding" asp-action="Index">Back to connection status</a>

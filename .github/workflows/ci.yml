@@ -9,36 +9,42 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   DOTNET_NOLOGO: true
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
 
+# Actions are pinned to full commit SHAs, with the release tag in a comment. Update the SHA and
+# the comment together.
 jobs:
   build-and-test:
     name: Build and test
-    # Linux runners ship a working Docker daemon, which the tenant-isolation suite needs to
-    # start SQL Server through Testcontainers.
+    # Linux runners ship a working Docker daemon, which the tenant-isolation suite needs to start
+    # SQL Server through Testcontainers.
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+      - name: Set up .NET (version from global.json)
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
-          dotnet-version: "8.0.x"
+          global-json-file: global.json
 
       - name: Restore
         run: dotnet restore
 
       - name: Check formatting
-        # Style is enforced at build time by EnforceCodeStyleInBuild, but this reports
-        # violations as a diff rather than as an opaque analyzer error.
+        # EnforceCodeStyleInBuild already enforces style at build time. This step reports
+        # violations as a readable diff instead of an opaque analyzer error.
         run: dotnet format --verify-no-changes --no-restore
 
       - name: Build
-        # TreatWarningsAsErrors is on for the whole solution, so a new warning fails here.
+        # TreatWarningsAsErrors is on for the whole solution, so any new warning fails here.
         run: dotnet build --no-restore --configuration Release
 
       - name: Unit tests
@@ -50,9 +56,9 @@ jobs:
 
       - name: Integration and tenant-isolation tests
         env:
-          # Turns a missing container runtime from a silent skip into a failure. Without this a
-          # runner whose Docker service failed would report green with the isolation suite
-          # never having executed.
+          # Turns a missing container runtime from a silent skip into a failure. Without it, a
+          # runner whose Docker service failed would report green without ever running the
+          # isolation suite.
           MLCP_REQUIRE_DOCKER: "true"
         run: >
           dotnet test tests/Mlcp.IntegrationTests/Mlcp.IntegrationTests.csproj
@@ -61,33 +67,65 @@ jobs:
           --results-directory artifacts/test-results
 
       - name: Assert the tenant-isolation suite actually ran
-        # The suite is required on every PR touching Persistence, Application or Web
-        # (CLAUDE.md, "How to work in this repo"). A green build in which it was filtered out,
-        # skipped or renamed away would defeat the point, so its execution is verified rather
-        # than assumed.
+        # The suite must run on every PR that touches Persistence, Application or Web (CLAUDE.md,
+        # "How to work in this repo"). A green build where it was filtered out, skipped or renamed
+        # away would defeat the point, so this step checks that it ran.
+        env:
+          MLCP_REQUIRE_DOCKER: "true"
+          # Minimum number of passing TenantIsolation tests. Raise it whenever the suite grows,
+          # so that deleting tests fails CI.
+          MIN_TENANT_ISOLATION_TESTS: "70"
         run: |
           set -euo pipefail
-          count=$(dotnet test tests/Mlcp.IntegrationTests/Mlcp.IntegrationTests.csproj \
+          dotnet test tests/Mlcp.IntegrationTests/Mlcp.IntegrationTests.csproj \
             --no-build --configuration Release \
             --filter 'Category=TenantIsolation' \
-            --logger "console;verbosity=normal" \
-            | tee /dev/stderr | grep -cE '^\s+Passed ' || true)
-          echo "Tenant-isolation tests passed: $count"
-          if [ "$count" -lt 14 ]; then
-            echo "::error::Expected at least 14 passing tenant-isolation tests, saw $count."
+            --logger "trx;LogFileName=tenant-isolation.trx" \
+            --results-directory artifacts/isolation
+          trx=artifacts/isolation/tenant-isolation.trx
+          passed=$(grep -o 'passed="[0-9]*"' "$trx" | head -1 | grep -o '[0-9]*')
+          failed=$(grep -o 'failed="[0-9]*"' "$trx" | head -1 | grep -o '[0-9]*')
+          echo "Tenant-isolation tests: passed=$passed failed=$failed"
+          if [ "$failed" -ne 0 ] || [ "$passed" -lt "$MIN_TENANT_ISOLATION_TESTS" ]; then
+            echo "::error::Expected at least $MIN_TENANT_ISOLATION_TESTS passing tenant-isolation tests and no failures; saw passed=$passed failed=$failed."
             exit 1
           fi
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-results
-          path: artifacts/test-results
+          path: |
+            artifacts/test-results
+            artifacts/isolation
           if-no-files-found: ignore
 
+  vulnerable-packages:
+    name: NuGet vulnerability check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Fail on any vulnerable direct or transitive package
+        run: |
+          set -euo pipefail
+          dotnet list package --vulnerable --include-transitive 2>&1 | tee vulnerable.txt
+          if grep -qiE 'has the following vulnerable packages' vulnerable.txt; then
+            echo "::error::Vulnerable NuGet packages found (see the log above)."
+            exit 1
+          fi
+
   migrations:
-    name: Migrations apply cleanly
+    name: Migrations apply cleanly and match the model
     runs-on: ubuntu-latest
 
     services:
@@ -106,23 +144,131 @@ jobs:
           --health-retries 20
           --health-start-period 30s
 
-    steps:
-      - uses: actions/checkout@v4
+    env:
+      MLCP_MIGRATIONS_CONNECTION: "Server=localhost,1433;Database=MlcpCi;User Id=sa;Password=Ci_Password_1;TrustServerCertificate=True;Encrypt=True"
 
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
-          dotnet-version: "8.0.x"
+          global-json-file: global.json
 
       - name: Restore tools
         run: dotnet tool restore
 
+      - name: No model change without a migration
+        # has-pending-model-changes (EF Core 8+) fails when the model differs from the latest
+        # migration snapshot, meaning someone changed an entity or configuration and forgot the
+        # migration.
+        run: >
+          dotnet dotnet-ef migrations has-pending-model-changes
+          --project src/Mlcp.Persistence
+          --startup-project src/Mlcp.Web
+
       - name: Apply migrations to an empty database
-        # Catches what a model-only test cannot: hand-written SQL in a migration that is
-        # invalid, out of order, or depends on an object the previous migration did not create.
-        env:
-          MLCP_MIGRATIONS_CONNECTION: "Server=localhost,1433;Database=MlcpCi;User Id=sa;Password=Ci_Password_1;TrustServerCertificate=True;Encrypt=True"
+        # Catches what a model-only test cannot: hand-written SQL in a migration that is invalid,
+        # out of order, or depends on an object an earlier migration did not create.
         run: >
           dotnet dotnet-ef database update
           --project src/Mlcp.Persistence
           --startup-project src/Mlcp.Web
+
+      - name: Row-level security policy exists
+        run: |
+          set -euo pipefail
+          count=$(docker exec "${{ job.services.sql.id }}" /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P Ci_Password_1 -C -d MlcpCi -h -1 -W \
+            -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM sys.security_policies WHERE name = 'TenantSecurityPolicy' AND is_enabled = 1")
+          echo "Enabled TenantSecurityPolicy count: $count"
+          test "$count" = "1"
+
+  bicep:
+    name: Bicep build and lint
+    runs-on: ubuntu-latest
+
+    env:
+      # Dummy values for readEnvironmentVariable() in the .bicepparam files. The build only checks
+      # that the files compile; the deployment workflow supplies real values.
+      MLCP_ENTRA_CLIENT_ID: "00000000-0000-0000-0000-000000000000"
+      MLCP_USAGE_INSIGHTS_CLIENT_ID: "00000000-0000-0000-0000-000000000000"
+      MLCP_SQL_ADMIN_GROUP_OBJECT_ID: "00000000-0000-0000-0000-000000000000"
+      MLCP_SQL_ADMIN_GROUP_NAME: ci
+      MLCP_ACR_NAME: ci
+      MLCP_ACR_RESOURCE_GROUP: ci
+      MLCP_WEB_IMAGE: ci
+      MLCP_SYNC_IMAGE: ci
+      MLCP_MIGRATE_IMAGE: ci
+      MLCP_WEB_REVISION_SUFFIX: ci
+      MLCP_REGION_DIRECTORY_TABLE_URI: https://ci.table.core.windows.net/TenantRegions
+      MLCP_REGION_DIRECTORY_STORAGE_ACCOUNT_ID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ci/providers/Microsoft.Storage/storageAccounts/ci
+      MLCP_PUBLIC_DOMAIN: example.com
+      MLCP_CUSTOMER_RBAC_TEMPLATE_URL: https://example.com/customer-rbac.json
+      AZURE_BICEP_CHECK_VERSION: "false"
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Install Bicep
+        run: az bicep install && az bicep version
+
+      - name: Build and lint every Bicep and parameter file
+        # Any error or warning fails the job.
+        run: |
+          set -uo pipefail
+          status=0
+          while IFS= read -r f; do
+            case "$f" in
+              *.bicepparam) out=$(az bicep build-params --file "$f" --stdout 2>&1 >/dev/null) ;;
+              *)            out=$(az bicep build --file "$f" --stdout 2>&1 >/dev/null) ;;
+            esac
+            lint=$(az bicep lint --file "$f" 2>&1)
+            diagnostics=$(printf '%s\n%s\n' "$out" "$lint" | grep -E 'Warning|Error' || true)
+            if [ -n "$diagnostics" ]; then
+              echo "::error file=$f::Bicep diagnostics"
+              echo "$diagnostics"
+              status=1
+            else
+              echo "ok  $f"
+            fi
+          done < <(find infra -name '*.bicep' -o -name '*.bicepparam' | sort)
+          exit $status
+
+      - name: customer-rbac.json matches customer-rbac.bicep
+        # The Deploy to Azure button needs ARM JSON (docs/07 Guide B). Metadata carries the Bicep
+        # version, so it is excluded from the comparison.
+        run: |
+          set -euo pipefail
+          az bicep build --file infra/customer-rbac.bicep --outfile /tmp/customer-rbac.json
+          if ! diff <(jq -S 'del(.metadata)' /tmp/customer-rbac.json) <(jq -S 'del(.metadata)' infra/customer-rbac.json); then
+            echo "::error file=infra/customer-rbac.json::Out of date. Run: az bicep build --file infra/customer-rbac.bicep --outfile infra/customer-rbac.json"
+            exit 1
+          fi
+
+  images:
+    name: Container images build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: web
+            dockerfile: src/Mlcp.Web/Dockerfile
+          - name: sync
+            dockerfile: src/Mlcp.Sync/Dockerfile
+          - name: migrate
+            dockerfile: src/Mlcp.Persistence/Dockerfile.migrate
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build ${{ matrix.name }}
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

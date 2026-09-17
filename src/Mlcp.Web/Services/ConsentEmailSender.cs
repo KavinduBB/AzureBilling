@@ -38,6 +38,9 @@ public sealed record EmailOptions
 /// </remarks>
 public sealed class AzureCommunicationConsentEmailSender : IConsentEmailSender
 {
+    /// <summary>The only subject this message is ever sent with.</summary>
+    public const string Subject = "A colleague asked you to connect your organisation to MLCP";
+
     private readonly EmailClient _client;
     private readonly EmailOptions _options;
     private readonly ILogger<AzureCommunicationConsentEmailSender> _logger;
@@ -68,7 +71,9 @@ public sealed class AzureCommunicationConsentEmailSender : IConsentEmailSender
         var message = new EmailMessage(
             _options.SenderAddress,
             new EmailRecipients([new EmailAddress(request.SentToEmail)]),
-            new EmailContent($"{request.RequestedByUpn} is asking you to connect your Microsoft tenant to MLCP")
+            // Fixed subject: nothing a user or directory controls goes in the subject line, which
+            // is what a phishing filter and a hurried admin judge the message by (ADR-018).
+            new EmailContent(Subject)
             {
                 PlainText = BuildPlainText(request, consentLandingUrl),
                 Html = BuildHtml(request, consentLandingUrl),
@@ -92,7 +97,7 @@ public sealed class AzureCommunicationConsentEmailSender : IConsentEmailSender
 
         MLCP asks to read two things:
           - your organisation's purchased licences and renewal dates
-          - your users' basic profiles, so it can show which licences are assigned to whom
+          - your users' profiles ("Read all users' full profiles"), so it can show which licences are assigned to whom
 
         It cannot read email, files or messages, cannot change anything, and cannot buy, assign
         or remove licences with these permissions. You can revoke access at any time from the
@@ -119,7 +124,7 @@ public sealed class AzureCommunicationConsentEmailSender : IConsentEmailSender
         <p>MLCP asks to read two things:</p>
         <ul>
           <li>your organisation's purchased licences and renewal dates</li>
-          <li>your users' basic profiles, so it can show which licences are assigned to whom</li>
+          <li>your users' profiles ("Read all users' full profiles"), so it can show which licences are assigned to whom</li>
         </ul>
         <p>It cannot read email, files or messages, cannot change anything, and cannot buy, assign
         or remove licences with these permissions. You can revoke access at any time from the Entra
@@ -132,20 +137,35 @@ public sealed class AzureCommunicationConsentEmailSender : IConsentEmailSender
 }
 
 /// <summary>
-/// Writes the consent link to the log instead of sending it. Development only.
+/// Records that a consent email would have been sent, without sending it. Development only.
 /// </summary>
 /// <remarks>
-/// Registered when no Communication Services endpoint is configured, so a developer can run the
-/// whole onboarding flow locally by copying the link out of the console. It logs the URL, which
-/// contains a live token, and so must never be registered in a deployed environment — the
-/// composition root selects on configuration and logs a warning when this one is chosen.
+/// <para>
+/// Refuses to construct outside Development, so a deployment that forgot its email settings
+/// fails loudly instead of quietly not emailing anyone (the host's startup checks catch this
+/// first; this is the second line).
+/// </para>
+/// <para>
+/// It never logs the link: the token in it is a live credential for the landing page, and log
+/// streams are widely readable. It logs the request id and the start of the token, which is
+/// enough to find the row (<c>PendingConsentRequest.Token</c>) in the local database.
+/// </para>
 /// </remarks>
 public sealed class LoggingConsentEmailSender : IConsentEmailSender
 {
     private readonly ILogger<LoggingConsentEmailSender> _logger;
 
-    public LoggingConsentEmailSender(ILogger<LoggingConsentEmailSender> logger)
+    public LoggingConsentEmailSender(IHostEnvironment environment, ILogger<LoggingConsentEmailSender> logger)
     {
+        ArgumentNullException.ThrowIfNull(environment);
+
+        if (!environment.IsDevelopment())
+        {
+            throw new InvalidOperationException(
+                "LoggingConsentEmailSender is for local development only. Configure Mlcp:Email:Endpoint and "
+                + "Mlcp:Email:SenderAddress.");
+        }
+
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -156,11 +176,14 @@ public sealed class LoggingConsentEmailSender : IConsentEmailSender
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        var tokenHint = request.Token.Length > 4 ? request.Token[..4] : string.Empty;
+
         _logger.LogWarning(
-            "Email is not configured. Consent link for tenant {TenantId} that would have gone to {Recipient}: {ConsentUrl}",
+            "Email is not configured (Development). Consent request {RequestId} for tenant {TenantId} was not sent; "
+            + "its landing page is /onboarding/consent/<token> where the token starts '{TokenHint}'.",
+            request.PendingConsentRequestId,
             request.TenantId,
-            request.SentToEmail,
-            consentLandingUrl);
+            tokenHint);
 
         return Task.CompletedTask;
     }

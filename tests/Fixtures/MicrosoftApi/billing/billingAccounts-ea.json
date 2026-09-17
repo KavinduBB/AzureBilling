@@ -1,0 +1,15 @@
+{
+  "value": [
+    {
+      "id": "/providers/Microsoft.Billing/billingAccounts/12345678",
+      "name": "12345678",
+      "type": "Microsoft.Billing/billingAccounts",
+      "properties": {
+        "accountType": "Enterprise",
+        "agreementType": "EnterpriseAgreement",
+        "displayName": "Contoso Enrollment",
+        "accountStatus": "Active"
+      }
+    }
+  ]
+}

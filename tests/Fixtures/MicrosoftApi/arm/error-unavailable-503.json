@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "ServiceUnavailable",
+    "message": "The service is temporarily unavailable."
+  }
+}

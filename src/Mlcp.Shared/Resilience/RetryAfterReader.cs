@@ -3,14 +3,26 @@ using System.Globalization;
 namespace Mlcp.Shared.Resilience;
 
 /// <summary>
-/// Reads the retry hints Microsoft returns when it throttles us.
+/// Reads the retry hints Microsoft returns when it throttles us (ADR-016 rule 8).
 /// </summary>
 /// <remarks>
-/// Two headers matter and they are not interchangeable. <c>Retry-After</c> is the standard one
-/// used by Graph, Resource Manager and Cost Management. The Consumption APIs additionally
-/// return <c>x-ms-ratelimit-microsoft.consumption-retry-after</c>, and ignoring it is how a
-/// client ends up hammering an endpoint that has already told it to stop
-/// (docs/02-api-reference.md §2.4).
+/// <para>
+/// Three headers matter and they are not interchangeable. <c>Retry-After</c> is the standard one
+/// (delta-seconds or HTTP-date). The Consumption APIs add
+/// <c>x-ms-ratelimit-microsoft.consumption-retry-after</c> (docs/02 §2.4), and the Cost
+/// Management Query API adds <c>x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after</c> when
+/// the tenant's QPU quota is exhausted
+/// (<see href="https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/manage-automation">Cost Management automation</see>).
+/// </para>
+/// <para>
+/// A hint of zero, a negative number or a date in the past carries no information, so it reads
+/// as "no hint" and the caller's own exponential backoff applies. Retrying immediately on
+/// <c>Retry-After: 0</c> is how a client turns one 429 into a burst of them.
+/// </para>
+/// <para>
+/// No upper bound is applied here: whether a long hint is honoured or turned into a re-queue is a
+/// budget decision made by the pipeline (ADR-016 rule 7), not a parsing one.
+/// </para>
 /// </remarks>
 public static class RetryAfterReader
 {
@@ -18,17 +30,14 @@ public static class RetryAfterReader
 
     public const string ConsumptionRetryAfterHeader = "x-ms-ratelimit-microsoft.consumption-retry-after";
 
-    /// <summary>
-    /// Upper bound on an honoured delay. Microsoft occasionally returns very long hints; a job
-    /// that would sleep past its next scheduled run should fail and be re-queued instead of
-    /// holding a worker.
-    /// </summary>
-    public static TimeSpan MaximumHonouredDelay { get; } = TimeSpan.FromMinutes(10);
+    public const string CostManagementQpuRetryAfterHeader = "x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after";
+
+    private static readonly string[] SecondsHeaders = [ConsumptionRetryAfterHeader, CostManagementQpuRetryAfterHeader];
 
     /// <summary>
-    /// Returns the longest delay any recognised header asks for, or null when none is present
-    /// or parseable. The longest is chosen because both headers can appear and each represents
-    /// a separate limit that must be satisfied.
+    /// Returns the longest positive delay any recognised header asks for, or null when none is
+    /// present, parseable and positive. The longest wins because each header reports a separate
+    /// limit that must be satisfied.
     /// </summary>
     public static TimeSpan? Read(HttpResponseMessage? response, TimeProvider timeProvider)
     {
@@ -43,13 +52,13 @@ public static class RetryAfterReader
 
         foreach (var candidate in ReadAll(response, timeProvider))
         {
-            if (longest is null || candidate > longest)
+            if (candidate > TimeSpan.Zero && (longest is null || candidate > longest))
             {
                 longest = candidate;
             }
         }
 
-        return longest is { } delay ? Clamp(delay) : null;
+        return longest;
     }
 
     private static IEnumerable<TimeSpan> ReadAll(HttpResponseMessage response, TimeProvider timeProvider)
@@ -63,25 +72,17 @@ public static class RetryAfterReader
             }
             else if (retryAfter.Date is { } date)
             {
-                var until = date - timeProvider.GetUtcNow();
-
-                if (until > TimeSpan.Zero)
-                {
-                    yield return until;
-                }
+                yield return date - timeProvider.GetUtcNow();
             }
         }
 
-        foreach (var header in new[] { ConsumptionRetryAfterHeader, RetryAfterHeader })
+        foreach (var header in SecondsHeaders)
         {
-            if (!TryGetHeaderValues(response, header, out var values))
+            foreach (var value in GetHeaderValues(response, header))
             {
-                continue;
-            }
-
-            foreach (var value in values)
-            {
-                if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds) && seconds > 0)
+                if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+                    && seconds > 0
+                    && seconds < TimeSpan.MaxValue.TotalSeconds)
                 {
                     yield return TimeSpan.FromSeconds(seconds);
                 }
@@ -89,24 +90,18 @@ public static class RetryAfterReader
         }
     }
 
-    private static bool TryGetHeaderValues(HttpResponseMessage response, string name, out IEnumerable<string> values)
+    private static IEnumerable<string> GetHeaderValues(HttpResponseMessage response, string name)
     {
         if (response.Headers.TryGetValues(name, out var fromHeaders))
         {
-            values = fromHeaders;
-            return true;
+            return fromHeaders;
         }
 
         if (response.Content?.Headers.TryGetValues(name, out var fromContent) == true)
         {
-            values = fromContent;
-            return true;
+            return fromContent;
         }
 
-        values = [];
-        return false;
+        return [];
     }
-
-    private static TimeSpan Clamp(TimeSpan delay)
-        => delay > MaximumHonouredDelay ? MaximumHonouredDelay : delay;
 }

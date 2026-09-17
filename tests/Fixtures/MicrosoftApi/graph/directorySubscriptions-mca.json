@@ -1,0 +1,18 @@
+{
+  "value": [
+    {
+      "id": "00000000-0000-0000-0000-000000000c01",
+      "commerceSubscriptionId": "00000000-0000-0000-0000-000000000c11",
+      "createdDateTime": "2025-10-01T00:00:00Z",
+      "isTrial": false,
+      "nextLifecycleDateTime": "2026-10-01T00:00:00Z",
+      "skuId": "00000000-0000-0000-0000-000000000e05",
+      "skuPartNumber": "ENTERPRISEPACK",
+      "status": "Enabled",
+      "totalLicenses": 50,
+      "ownerId": null,
+      "ownerTenantId": null,
+      "ownerType": null
+    }
+  ]
+}

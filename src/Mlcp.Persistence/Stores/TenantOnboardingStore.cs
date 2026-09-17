@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Mlcp.Application.Onboarding;
+using Mlcp.Domain.Audit;
 using Mlcp.Domain.Capabilities;
 using Mlcp.Domain.Tenancy;
 
@@ -66,6 +67,12 @@ public sealed class TenantOnboardingStore : ITenantOnboardingStore
         await _context.OnboardingSteps.AddAsync(created, cancellationToken).ConfigureAwait(false);
 
         return created;
+    }
+
+    public async Task AddAuditAsync(AuditLog entry, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        await _context.AuditLogs.AddAsync(entry, cancellationToken).ConfigureAwait(false);
     }
 
     public Task SaveChangesAsync(CancellationToken cancellationToken)

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-08-01/managementGroupDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.46.1.21595",
+      "templateHash": "11409728667118094310"
+    }
+  },
+  "parameters": {
+    "mlcpPrincipalId": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36,
+      "metadata": {
+        "description": "Object ID of the MLCP enterprise application (service principal) in YOUR tenant. Find it in the Microsoft Entra admin center under Enterprise applications > MLCP > Overview > Object ID. It exists once your administrator has connected MLCP. Do not use the Application (client) ID."
+      }
+    }
+  },
+  "variables": {
+    "costManagementReaderRoleId": "72fafb9e-0641-4937-9268-a91bfd8191a3"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(managementGroup().id, parameters('mlcpPrincipalId'), variables('costManagementReaderRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[tenantResourceId('Microsoft.Authorization/roleDefinitions', variables('costManagementReaderRoleId'))]",
+        "principalId": "[parameters('mlcpPrincipalId')]",
+        "principalType": "ServicePrincipal",
+        "description": "MLCP read-only cost visibility"
+      }
+    }
+  ],
+  "outputs": {
+    "assignedScope": {
+      "type": "string",
+      "metadata": {
+        "description": "Scope the role was assigned at."
+      },
+      "value": "[managementGroup().id]"
+    }
+  }
+}

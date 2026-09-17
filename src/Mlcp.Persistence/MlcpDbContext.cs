@@ -67,6 +67,8 @@ public class MlcpDbContext : DbContext
 
     public DbSet<SyncRun> SyncRuns => Set<SyncRun>();
 
+    public DbSet<SyncGateOverride> SyncGateOverrides => Set<SyncGateOverride>();
+
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
     /// <summary>

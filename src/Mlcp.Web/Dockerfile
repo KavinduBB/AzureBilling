@@ -1,7 +1,7 @@
 # Build context is the repository root:
 #   docker build -f src/Mlcp.Web/Dockerfile -t mlcp-web .
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0-noble AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS build
 WORKDIR /src
 
 # Copy the files that decide the restore graph first, so a source-only change does not
@@ -24,7 +24,7 @@ COPY . .
 # built from source that would fail CI.
 RUN dotnet publish src/Mlcp.Web/Mlcp.Web.csproj -c Release -o /app --no-restore
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0-noble AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS runtime
 WORKDIR /app
 
 # Container Apps routes to 8080 by default and the non-root images cannot bind 80.

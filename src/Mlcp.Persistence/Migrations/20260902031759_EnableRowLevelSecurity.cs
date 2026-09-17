@@ -12,8 +12,8 @@ namespace Mlcp.Persistence.Migrations;
 /// <remarks>
 /// The SQL is produced by <see cref="TenantRlsScript"/> rather than pasted here so that the
 /// list of covered tables is a single reviewable value, and so the tenant-isolation test suite
-/// can assert that list against the EF model. A new tenant-scoped table that nobody adds to
-/// <see cref="TenantRlsScript.TenantScopedTables"/> fails CI instead of shipping unprotected.
+/// can assert that list against the EF model. Later tables are protected by the migration that
+/// creates them, using a newer entry in <see cref="TenantRlsScript.Snapshots"/>.
 /// </remarks>
 public partial class EnableRowLevelSecurity : Migration
 {
@@ -22,7 +22,8 @@ public partial class EnableRowLevelSecurity : Migration
         migrationBuilder.Sql(TenantRlsScript.DropSecurityPolicy());
         migrationBuilder.Sql(TenantRlsScript.DropPredicateFunction());
         migrationBuilder.Sql(TenantRlsScript.CreatePredicateFunction());
-        migrationBuilder.Sql(TenantRlsScript.CreateSecurityPolicy(TenantRlsScript.TenantScopedTables));
+        // A dated snapshot, never the live list: this migration must replay identically forever.
+        migrationBuilder.Sql(TenantRlsScript.CreateSecurityPolicy(TenantRlsScript.Snapshots.Initial20260902));
     }
 
     protected override void Down(MigrationBuilder migrationBuilder)
