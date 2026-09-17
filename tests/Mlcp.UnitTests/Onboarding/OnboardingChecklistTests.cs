@@ -22,6 +22,14 @@ public class OnboardingChecklistTests
         return tenant;
     }
 
+    /// <summary>
+    /// Positive MOSA evidence (ADR-020): a pay-as-you-go subscription whose billing property says
+    /// Microsoft Online Services Program. Graph alone is no longer enough to call a tenant MOSA.
+    /// </summary>
+    private static ArmProbeResult MosaEvidence { get; } = new(
+        [new AzureSubscriptionProbe(Guid.NewGuid(), "Pay-As-You-Go", AgreementType.Mosa, IsAzurePlan: true)],
+        CostManagementQueryable: false);
+
     private static TenantCapabilityProfile ProfileFrom(
         Guid tenantId,
         GraphProbeResult graph,
@@ -88,7 +96,7 @@ public class OnboardingChecklistTests
         var profile = ProfileFrom(
             tenant.TenantId,
             new GraphProbeResult(true, true, false),
-            ArmProbeResult.NotReachable,
+            MosaEvidence,
             BillingProbeResult.NotReachable);
 
         var checklist = OnboardingChecklist.Build(tenant, profile);
@@ -109,7 +117,7 @@ public class OnboardingChecklistTests
         var profile = ProfileFrom(
             tenant.TenantId,
             new GraphProbeResult(true, true, false),
-            ArmProbeResult.NotReachable,
+            MosaEvidence,
             BillingProbeResult.NotReachable);
 
         var checklist = OnboardingChecklist.Build(tenant, profile);
@@ -202,7 +210,7 @@ public class OnboardingChecklistTests
         var profile = ProfileFrom(
             tenant.TenantId,
             new GraphProbeResult(true, true, false),
-            ArmProbeResult.NotReachable,
+            MosaEvidence,
             BillingProbeResult.NotReachable);
 
         var checklist = OnboardingChecklist.Build(tenant, profile);

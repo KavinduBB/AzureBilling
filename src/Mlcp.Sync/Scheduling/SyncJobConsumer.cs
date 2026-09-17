@@ -1,44 +1,62 @@
 using System.Text.Json;
 using Azure.Messaging.ServiceBus;
-using Mlcp.Application.Onboarding;
 using Mlcp.Domain.Common;
 using Mlcp.Domain.Sync;
-using Mlcp.Shared.Resilience;
+using Mlcp.Integration.Azure.Messaging;
 using Mlcp.Shared.Tenancy;
 
 namespace Mlcp.Sync.Scheduling;
 
+/// <summary>Consumer tunables.</summary>
+public sealed record SyncConsumerOptions
+{
+    /// <summary>Tenants processed at once (sessions are per tenant).</summary>
+    public int MaxConcurrentSessions { get; init; } = 8;
+
+    /// <summary>
+    /// The most one message may take. Worst case for discovery is roughly 20 calls, each with up to
+    /// six 100-second attempts and hinted waits of up to 5 minutes; beyond this the job is
+    /// cancelled and retried rather than holding a session forever.
+    /// </summary>
+    public TimeSpan MessageTimeout { get; init; } = TimeSpan.FromMinutes(45);
+
+    /// <summary>Lock renewal must outlast <see cref="MessageTimeout"/> so a slow job never loses its lock.</summary>
+    public TimeSpan MaxAutoLockRenewalDuration => MessageTimeout + TimeSpan.FromMinutes(15);
+}
+
 /// <summary>
-/// Consumes sync jobs from Service Bus and runs them, one tenant at a time per session.
+/// Consumes sync jobs from Service Bus, one tenant at a time per session.
 /// </summary>
 /// <remarks>
 /// <para>
-/// A session processor rather than a plain one. Sessions are per tenant, so messages for a
-/// single customer are handled in order while different customers run in parallel — which is
-/// what stops a long-running enterprise sync from delaying every small tenant behind it.
+/// Each message gets its own DI scope bound to the message's tenant, so a job sees the same
+/// tenant confinement as a web request (query filter and <c>SESSION_CONTEXT</c>).
 /// </para>
 /// <para>
-/// Each message gets its own DI scope with the tenant context bound to that message's tenant.
-/// The handler therefore sees exactly the same tenant confinement as a web request: the query
-/// filter and <c>SESSION_CONTEXT</c> both apply, and a job cannot read another customer's rows
-/// even though the worker as a whole can.
+/// Messages are settled explicitly. <see cref="SyncJobProcessor"/> decides: retries and throttling
+/// are handled by completing the delivered message and enqueuing a scheduled copy, never by
+/// sleeping or abandoning (ADR-016 rule 7). Abandon is used only when the worker is shutting down
+/// or the follow-up could not be sent, so the message is not lost.
 /// </para>
 /// </remarks>
 public sealed class SyncJobConsumer : BackgroundService
 {
     private readonly ServiceBusClient _client;
-    private readonly SyncQueueOptions _options;
+    private readonly SyncQueueOptions _queueOptions;
+    private readonly SyncConsumerOptions _options;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<SyncJobConsumer> _logger;
     private ServiceBusSessionProcessor? _processor;
 
     public SyncJobConsumer(
         ServiceBusClient client,
-        SyncQueueOptions options,
+        SyncQueueOptions queueOptions,
+        SyncConsumerOptions options,
         IServiceScopeFactory scopeFactory,
         ILogger<SyncJobConsumer> logger)
     {
         _client = client;
+        _queueOptions = queueOptions;
         _options = options;
         _scopeFactory = scopeFactory;
         _logger = logger;
@@ -47,26 +65,23 @@ public sealed class SyncJobConsumer : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _processor = _client.CreateSessionProcessor(
-            _options.QueueName,
+            _queueOptions.QueueName,
             new ServiceBusSessionProcessorOptions
             {
-                // Concurrency is across sessions, so this is "how many tenants at once", not
-                // "how many jobs for one tenant at once".
-                MaxConcurrentSessions = 8,
+                MaxConcurrentSessions = _options.MaxConcurrentSessions,
                 MaxConcurrentCallsPerSession = 1,
-
-                // Settled explicitly: a job that failed must not be completed, and one that
-                // failed for a reason retrying cannot fix must not be retried five times.
                 AutoCompleteMessages = false,
-                MaxAutoLockRenewalDuration = TimeSpan.FromMinutes(30),
+                MaxAutoLockRenewalDuration = _options.MaxAutoLockRenewalDuration,
             });
 
         _processor.ProcessMessageAsync += HandleMessageAsync;
         _processor.ProcessErrorAsync += HandleErrorAsync;
 
+        // A failure to start propagates: with BackgroundServiceExceptionBehavior.StopHost the
+        // container exits and is restarted instead of idling with no consumer.
         await _processor.StartProcessingAsync(stoppingToken).ConfigureAwait(false);
 
-        _logger.LogInformation("Consuming sync jobs from {QueueName}.", _options.QueueName);
+        _logger.LogInformation("Consuming sync jobs from {QueueName}.", _queueOptions.QueueName);
 
         try
         {
@@ -78,85 +93,110 @@ public sealed class SyncJobConsumer : BackgroundService
         }
     }
 
+    internal static SyncJobMessage? Parse(BinaryData body)
+    {
+        var job = JsonSerializer.Deserialize<SyncJobMessage>(body.ToString(), DomainJson.Options);
+
+        return job is null
+            || job.TenantId == Guid.Empty
+            || job.JobType == SyncJobType.Unknown
+            || string.IsNullOrWhiteSpace(job.DeduplicationKey)
+            ? null
+            : job;
+    }
+
     private async Task HandleMessageAsync(ProcessSessionMessageEventArgs args)
     {
         SyncJobMessage? job;
 
         try
         {
-            job = JsonSerializer.Deserialize<SyncJobMessage>(args.Message.Body.ToString(), DomainJson.Options);
+            job = Parse(args.Message.Body);
         }
         catch (JsonException ex)
         {
-            // Unparseable messages will never parse. Dead-letter immediately rather than
-            // burning the delivery count and delaying every later message in the session.
-            _logger.LogError(ex, "Discarding a sync job message that could not be deserialised.");
+            _logger.LogError(ex, "Dead-lettering sync job message {MessageId}: unparseable.", args.Message.MessageId);
             await args.DeadLetterMessageAsync(args.Message, "InvalidPayload", ex.Message).ConfigureAwait(false);
             return;
         }
 
-        if (job is null || job.TenantId == Guid.Empty || job.JobType == SyncJobType.Unknown)
+        if (job is null)
         {
-            await args.DeadLetterMessageAsync(args.Message, "InvalidPayload", "Missing tenant or job type")
-                .ConfigureAwait(false);
+            await args.DeadLetterMessageAsync(args.Message, "InvalidPayload", "Missing tenant, job type or key").ConfigureAwait(false);
+            return;
+        }
+
+        var correlationId = string.IsNullOrWhiteSpace(args.Message.CorrelationId) ? job.CorrelationId : args.Message.CorrelationId;
+
+        using var logScope = _logger.BeginScope(new Dictionary<string, object>
+        {
+            ["CorrelationId"] = correlationId,
+            ["TenantId"] = job.TenantId,
+            ["JobType"] = job.JobType.ToString(),
+            ["MessageId"] = args.Message.MessageId,
+            ["Attempt"] = job.Attempt,
+        });
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(args.CancellationToken);
+        timeout.CancelAfter(_options.MessageTimeout);
+
+        using var scope = _scopeFactory.CreateScope();
+        scope.ServiceProvider.GetRequiredService<TenantContext>().SetTenant(job.TenantId);
+        var processor = scope.ServiceProvider.GetRequiredService<SyncJobProcessor>();
+
+        SyncJobResult result;
+
+        try
+        {
+            result = await processor.ProcessAsync(job, timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !args.CancellationToken.IsCancellationRequested)
+        {
+            // The job overran its budget. Treat it like any other failure.
+            _logger.LogError("{JobType} for tenant {TenantId} exceeded {Timeout}.", job.JobType, job.TenantId, _options.MessageTimeout);
+            await RequeueAfterTimeoutAsync(args, job).ConfigureAwait(false);
+            return;
+        }
+        catch (OperationCanceledException)
+        {
+            await args.AbandonMessageAsync(args.Message, cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            return;
+        }
+#pragma warning disable CA1031 // The processor only throws when a follow-up could not be sent; keep the message.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            _logger.LogError(ex, "Could not settle {JobType} for tenant {TenantId}; abandoning for redelivery.", job.JobType, job.TenantId);
+            await args.AbandonMessageAsync(args.Message, cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            return;
+        }
+
+        if (result.Disposition == SyncJobDisposition.DeadLetter)
+        {
+            await args.DeadLetterMessageAsync(args.Message, "RetriesExhausted", result.Reason).ConfigureAwait(false);
+            return;
+        }
+
+        _logger.LogInformation("{JobType} for tenant {TenantId} settled: {Reason}.", job.JobType, job.TenantId, result.Reason);
+        await args.CompleteMessageAsync(args.Message).ConfigureAwait(false);
+    }
+
+    private async Task RequeueAfterTimeoutAsync(ProcessSessionMessageEventArgs args, SyncJobMessage job)
+    {
+        if (job.Attempt >= SyncJobProcessor.MaxAttempts)
+        {
+            await args.DeadLetterMessageAsync(args.Message, "RetriesExhausted", "Timed out").ConfigureAwait(false);
             return;
         }
 
         using var scope = _scopeFactory.CreateScope();
+        var requeuer = scope.ServiceProvider.GetRequiredService<ISyncJobRequeuer>();
+        var clock = scope.ServiceProvider.GetRequiredService<TimeProvider>();
 
-        // Bind this scope to the job's tenant, exactly as the web middleware does for a request.
-        scope.ServiceProvider.GetRequiredService<TenantContext>().SetTenant(job.TenantId);
+        await requeuer.RequeueAsync(job.ForRetry(clock.GetUtcNow() + SyncSchedule.RetryDelay(job.Attempt)), CancellationToken.None)
+            .ConfigureAwait(false);
 
-        try
-        {
-            await RunAsync(scope.ServiceProvider, job, args.CancellationToken).ConfigureAwait(false);
-            await args.CompleteMessageAsync(args.Message).ConfigureAwait(false);
-        }
-        catch (NeedsReconsentException)
-        {
-            // The tenant has already been flagged and its sync halted. Retrying cannot restore a
-            // revoked grant, so the message is dead-lettered rather than redelivered.
-            _logger.LogWarning(
-                "Dead-lettering {JobType} for tenant {TenantId}: the tenant needs re-consent.",
-                job.JobType,
-                job.TenantId);
-
-            await args.DeadLetterMessageAsync(args.Message, "NeedsReconsent", "Consent or role missing")
-                .ConfigureAwait(false);
-        }
-#pragma warning disable CA1031 // Abandon and let Service Bus redeliver; the queue caps attempts.
-        catch (Exception ex)
-#pragma warning restore CA1031
-        {
-            _logger.LogError(ex, "{JobType} failed for tenant {TenantId}; abandoning for redelivery.", job.JobType, job.TenantId);
-            await args.AbandonMessageAsync(args.Message).ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>
-    /// Dispatches to the handler for this job type.
-    /// </summary>
-    /// <remarks>
-    /// Capability discovery is the only job wired in Phase 0. The rest arrive with the providers
-    /// that feed them in Phases 1 to 4; an unrecognised type is logged and completed rather than
-    /// retried, because redelivering a job nothing can run only fills the dead-letter queue.
-    /// </remarks>
-    private async Task RunAsync(IServiceProvider services, SyncJobMessage job, CancellationToken cancellationToken)
-    {
-        switch (job.JobType)
-        {
-            case SyncJobType.CapabilityDiscovery:
-                await services.GetRequiredService<CapabilityDiscoveryService>()
-                    .DiscoverAsync(job.TenantId, cancellationToken)
-                    .ConfigureAwait(false);
-                break;
-
-            default:
-                _logger.LogWarning(
-                    "No handler is registered for {JobType}; completing the message without running it.",
-                    job.JobType);
-                break;
-        }
+        await args.CompleteMessageAsync(args.Message).ConfigureAwait(false);
     }
 
     private Task HandleErrorAsync(ProcessErrorEventArgs args)

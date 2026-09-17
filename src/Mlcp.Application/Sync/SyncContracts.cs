@@ -305,22 +305,6 @@ public interface ISyncMaintenanceStore
     Task<int> SweepStagingAsync(CancellationToken cancellationToken);
 }
 
-/// <summary>
-/// Implemented by an exception meaning "Microsoft asked us to come back later, and waiting
-/// in-process is too long" (ADR-016 rule 7).
-/// </summary>
-/// <remarks>
-/// Defined here so the pipeline can react to throttling without depending on the concrete
-/// exception type in <c>Mlcp.Shared.Resilience</c>. The pipeline records the run as failed
-/// (keeping its staging and cursor for resume) and reports <see cref="RetryAfter"/> on the
-/// outcome so the caller can re-enqueue with a scheduled time instead of sleeping.
-/// </remarks>
-public interface IRetryLaterFailure
-{
-    /// <summary>How long Microsoft asked us to wait.</summary>
-    TimeSpan RetryAfter { get; }
-}
-
 /// <summary>The pipeline's verdict on one run.</summary>
 /// <param name="Run">The run record, in its final state.</param>
 /// <param name="LivePublished">

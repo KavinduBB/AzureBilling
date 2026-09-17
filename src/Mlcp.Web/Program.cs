@@ -14,12 +14,14 @@ using Microsoft.Identity.Web.UI;
 using Mlcp.Application;
 using Mlcp.Application.Onboarding;
 using Mlcp.Integration.Azure;
+using Mlcp.Integration.Azure.Messaging;
 using Mlcp.Integration.Azure.Regions;
 using Mlcp.Integration.Graph;
 using Mlcp.Persistence;
 using Mlcp.Shared;
 using Mlcp.Shared.Identity;
 using Mlcp.Shared.Logging;
+using Mlcp.Shared.Resilience;
 using Mlcp.Web.Infrastructure;
 using Mlcp.Web.Models;
 using Mlcp.Web.Services;
@@ -61,19 +63,13 @@ builder.Services.AddSingleton<RegionPicker>();
 
 var clientId = builder.Configuration["AzureAd:ClientId"];
 
-var identityOptions = new MlcpIdentityOptions
-{
-    ClientId = clientId ?? string.Empty,
-    CertificateName = builder.Configuration["Mlcp:ClientCertificateName"],
-    KeyVaultUri = string.IsNullOrWhiteSpace(keyVaultUri) ? null : new Uri(keyVaultUri),
-    ClientSecret = builder.Configuration["AzureAd:ClientSecret"],
-};
-
-builder.Services.AddMlcpShared(string.IsNullOrWhiteSpace(clientId) ? null : identityOptions);
+// Outside Development this refuses to start when either app registration or the certificate is
+// missing. Interactive budget: a long Retry-After fails fast instead of holding a request.
+builder.Services.AddMlcpShared(
+    builder.Configuration,
+    builder.Environment.IsDevelopment(),
+    MicrosoftCallBudget.Interactive);
 builder.Services.AddMlcpApplication();
-
-// Verified domains are unknown until discovery stores them (ADR-018); the default says so.
-builder.Services.TryAddScoped<ITenantDirectoryInfo, UnknownTenantDirectoryInfo>();
 
 // The database is not optional. Migrations use the design-time factory and never need the
 // running host, so there is nothing to gain from starting without one.
@@ -84,11 +80,12 @@ var connectionString = builder.Configuration.GetConnectionString("MlcpDatabase")
 
 builder.Services.AddMlcpPersistence(connectionString);
 
-builder.Services.AddGraphIntegration();
-builder.Services.AddAzureIntegration();
+builder.Services.AddGraphIntegration(builder.Configuration);
+builder.Services.AddAzureIntegration(builder.Configuration);
 
-// Integrator: register ISyncJobEnqueuer and IConsentVerifier. OnboardingService depends on both;
-// with ValidateOnBuild the host does not start until they are registered.
+// The web host only sends: discovery, consent verification and re-consent probes run in the
+// worker (CLAUDE.md rule 5). The same sender implementation serves both hosts.
+builder.Services.AddMlcpServiceBusEnqueuer(builder.Configuration);
 
 // Global tenant → region directory (ADR-021). In-memory only in Development, where a single
 // region is assumed; StartupRequirements insists on the table everywhere else.

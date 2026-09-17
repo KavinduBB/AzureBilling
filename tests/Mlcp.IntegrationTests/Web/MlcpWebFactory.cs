@@ -75,6 +75,9 @@ public sealed class MlcpWebFactory : WebApplicationFactory<Program>
             services.RemoveAll<ITenantOnboardingStore>();
             services.AddSingleton<ITenantOnboardingStore>(new NoProfileStore(Repository));
 
+            services.RemoveAll<ITenantDirectoryInfo>();
+            services.AddSingleton<ITenantDirectoryInfo, UnknownTenantDirectoryInfo>();
+
             services.RemoveAll<IConsentVerifier>();
             services.AddSingleton<IConsentVerifier>(Verifier);
 
@@ -307,6 +310,9 @@ public sealed class NoProfileStore(InMemoryWebRepository repository) : ITenantOn
 
     public Task<OnboardingStep> GetOrCreateStepAsync(Guid tenantId, OnboardingStepName step, CancellationToken cancellationToken)
         => throw new NotSupportedException("Discovery never runs in a request.");
+
+    public Task AddAuditAsync(AuditLog entry, CancellationToken cancellationToken)
+        => repository.AddAuditAsync(entry, cancellationToken);
 
     public Task SaveChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

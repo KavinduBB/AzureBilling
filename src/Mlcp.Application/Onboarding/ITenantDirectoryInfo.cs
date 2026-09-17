@@ -12,7 +12,8 @@ namespace Mlcp.Application.Onboarding;
 public interface ITenantDirectoryInfo
 {
     /// <summary>
-    /// The tenant's verified domain names, or null when they have not been discovered.
+    /// The tenant's verified domain names (lower case), from the last successful
+    /// <c>GET /organization</c> probe, or null when they have not been discovered.
     /// </summary>
     Task<IReadOnlyCollection<string>?> GetVerifiedDomainsAsync(Guid tenantId, CancellationToken cancellationToken);
 }

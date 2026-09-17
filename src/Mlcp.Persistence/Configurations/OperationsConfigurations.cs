@@ -25,6 +25,23 @@ internal sealed class TenantCapabilityProfileConfiguration : IEntityTypeConfigur
 
         builder.Ignore(p => p.Statuses);
 
+        // Verified domains from GET /organization, used to validate consent-request recipients
+        // (ADR-018). A JSON array; null until the first successful organization probe.
+        builder.Property<string?>("VerifiedDomainsJson")
+            .HasColumnName("VerifiedDomains")
+            .HasColumnType("nvarchar(max)")
+            .IsRequired(false);
+
+        builder.Ignore(p => p.VerifiedDomains);
+
+        // Cost scope rung and per-subscription agreements (ADR-017). JSON; null until discovered.
+        builder.Property<string?>("DiscoveryDetailJson")
+            .HasColumnName("DiscoveryDetail")
+            .HasColumnType("nvarchar(max)")
+            .IsRequired(false);
+
+        builder.Ignore(p => p.DiscoveryDetail);
+
         // The discovery scheduler sweeps profiles whose next run is due.
         builder.HasIndex(p => p.NextProfileUtc);
 

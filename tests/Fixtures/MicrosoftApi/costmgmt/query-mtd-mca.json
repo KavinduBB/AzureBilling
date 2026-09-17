@@ -1,0 +1,24 @@
+{
+  "id": "subscriptions/00000000-0000-0000-0000-000000000101/providers/Microsoft.CostManagement/query/00000000-0000-0000-0000-000000000000",
+  "name": "00000000-0000-0000-0000-000000000000",
+  "type": "Microsoft.CostManagement/query",
+  "properties": {
+    "nextLink": null,
+    "columns": [
+      {
+        "name": "Cost",
+        "type": "Number"
+      },
+      {
+        "name": "Currency",
+        "type": "String"
+      }
+    ],
+    "rows": [
+      [
+        12.34,
+        "USD"
+      ]
+    ]
+  }
+}
