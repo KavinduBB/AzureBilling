@@ -32,7 +32,7 @@ The review found two flaws in how Owners are created:
 2. **Only admins can start admin consent.** `POST /onboarding/connect` is refused for non-admins, who get the "Ask my admin" path.
 3. **Microsoft's `tenant` parameter must match.** It must equal the caller's `tid` (defence in depth; the tenant is still taken from the token).
 4. **Consent is verified, not assumed.** The callback does not mark the tenant consented. Instead, the app acquires an **app-only** token for the tenant and calls `GET /organization`:
-   - Success → `Tenant.GrantConsent`, and discovery is enqueued.
+   - Success → `Tenant.ConfirmConsent`, and discovery is enqueued.
    - `AADSTS700016` / `AADSTS7000229` (propagation) → the tenant enters `ConsentPendingVerification`, and a verification job is scheduled at +2 min, +5 min and +15 min.
    - Anything else → "Consent could not be confirmed".
 5. **The callback never cancels a scheduled deletion.** Reconnecting during the grace period is the explicit, Owner-only `POST /onboarding/cancel-disconnect`.
