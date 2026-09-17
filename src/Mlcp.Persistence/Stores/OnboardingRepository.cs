@@ -30,9 +30,6 @@ public sealed class OnboardingRepository : IOnboardingRepository
         => _context.AppUsers
             .FirstOrDefaultAsync(u => u.TenantId == tenantId && u.EntraObjectId == entraObjectId, cancellationToken);
 
-    public Task<bool> HasAnyAppUserAsync(Guid tenantId, CancellationToken cancellationToken)
-        => _context.AppUsers.AnyAsync(u => u.TenantId == tenantId, cancellationToken);
-
     public async Task AddAppUserAsync(AppUser user, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(user);
@@ -48,6 +45,37 @@ public sealed class OnboardingRepository : IOnboardingRepository
             .OrderByDescending(r => r.CreatedUtc)
             .FirstOrDefaultAsync(cancellationToken);
     }
+
+    public Task<PendingConsentRequest?> FindOpenConsentRequestAsync(
+        Guid tenantId,
+        Guid requestedByObjectId,
+        string sentToEmail,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sentToEmail);
+
+        var now = _timeProvider.GetUtcNow();
+
+        // The column uses the database's case-insensitive collation, matching how mail
+        // providers treat addresses in practice.
+        return _context.PendingConsentRequests
+            .Where(r => r.TenantId == tenantId
+                && r.RequestedByObjectId == requestedByObjectId
+                && r.SentToEmail == sentToEmail
+                && r.CompletedUtc == null
+                && r.ExpiresUtc > now)
+            .OrderByDescending(r => r.CreatedUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<PendingConsentRequest>> ListConsentRequestsSentSinceAsync(
+        Guid tenantId,
+        DateTimeOffset sinceUtc,
+        CancellationToken cancellationToken)
+        => await _context.PendingConsentRequests
+            .Where(r => r.TenantId == tenantId && r.LastSentUtc >= sinceUtc)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
 
     /// <summary>
     /// Resolves a consent request from its emailed token, within the current tenant.

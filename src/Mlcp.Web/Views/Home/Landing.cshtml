@@ -1,3 +1,4 @@
+@model Mlcp.Web.Models.LandingViewModel
 @{
     ViewData["Title"] = "Microsoft licence and cost management";
 }
@@ -11,10 +12,32 @@
         pay. Sign in with your work account to start.
     </p>
 
+    @if (Model.PreferredElsewhere is { } preferred)
+    {
+        <div class="alert alert-info" role="status">
+            You chose to use MLCP in @preferred.Name.
+            <a href="@preferred.Url">Continue there</a>.
+        </div>
+    }
+
     <p>
         <a class="btn btn-primary btn-lg" asp-area="MicrosoftIdentity" asp-controller="Account" asp-action="SignIn">
             Sign in with Microsoft
         </a>
+    </p>
+
+    @* ADR-021: data stays in the region chosen here. Signing in on the wrong stack still routes
+       an existing organisation to its own region. *@
+    <p class="text-muted small">
+        Data region: <strong>@Model.Region.Name</strong>.
+        @if (Model.Alternatives.Count > 0)
+        {
+            <span>Use a different region:</span>
+            @foreach (var alternative in Model.Alternatives)
+            {
+                <a class="ms-1" href="@alternative.Url">@alternative.Name</a>
+            }
+        }
     </p>
 </div>
 

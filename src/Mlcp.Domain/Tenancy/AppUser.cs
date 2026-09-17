@@ -6,6 +6,18 @@ namespace Mlcp.Domain.Tenancy;
 /// A person who may use MLCP for one tenant. Identity comes from Entra; the role is ours.
 /// Scoping to specific Azure subscriptions is optional and additive (docs/03 §4.4).
 /// </summary>
+/// <remarks>
+/// <para>
+/// <see cref="Role"/> is recorded for display and audit. Owner is not a grant: it mirrors
+/// whether the person currently holds a directory role that can grant tenant-wide consent, and
+/// is re-derived at every sign-in (ADR-018). Destructive actions re-check the live claim rather
+/// than trusting this column.
+/// </para>
+/// <para>
+/// There is no write-role flag. <c>SubscriptionManager</c> is an Entra app role read from the
+/// token (ADR-023).
+/// </para>
+/// </remarks>
 public class AppUser : TenantEntity
 {
     private readonly List<Guid> _scopeSubscriptionIds = [];
@@ -19,12 +31,6 @@ public class AppUser : TenantEntity
     public string DisplayName { get; private set; } = string.Empty;
 
     public AppRole Role { get; private set; }
-
-    /// <summary>
-    /// Phase 5 write role, held in addition to <see cref="Role"/>. Kept separate from the read
-    /// role so granting write access is always a deliberate second act (ADR-010).
-    /// </summary>
-    public bool IsSubscriptionManager { get; private set; }
 
     /// <summary>Empty means every subscription in the tenant; otherwise an allow-list.</summary>
     public IReadOnlyCollection<Guid> ScopeSubscriptionIds => _scopeSubscriptionIds.AsReadOnly();
@@ -50,13 +56,7 @@ public class AppUser : TenantEntity
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(upn);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
-
-        if (role is AppRole.Unknown or AppRole.SubscriptionManager)
-        {
-            throw new ArgumentException(
-                "Role must be a read role: Owner, Analyst or Viewer. SubscriptionManager is granted separately.",
-                nameof(role));
-        }
+        EnsureDefined(role);
 
         return new AppUser(tenantId, nowUtc)
         {
@@ -68,44 +68,66 @@ public class AppUser : TenantEntity
         };
     }
 
+    /// <summary>
+    /// Creates the record for someone signing in for the first time. Directory admins are Owner;
+    /// everyone else is Viewer, including the very first person from the tenant (ADR-018).
+    /// </summary>
+    public static AppUser FirstSignIn(
+        Guid tenantId,
+        Guid entraObjectId,
+        string upn,
+        string displayName,
+        bool isDirectoryAdmin,
+        DateTimeOffset nowUtc)
+        => Create(tenantId, entraObjectId, upn, displayName, isDirectoryAdmin ? AppRole.Owner : AppRole.Viewer, nowUtc);
+
+    /// <summary>
+    /// Sets an in-app role. Owner is accepted only because it is derived from the directory by
+    /// <see cref="ApplyDirectoryAdminStatus"/>; Phase 1 role management must not offer it.
+    /// </summary>
     public void ChangeRole(AppRole role, DateTimeOffset nowUtc)
     {
-        if (role is AppRole.Unknown or AppRole.SubscriptionManager)
-        {
-            throw new ArgumentException(
-                "Role must be a read role. Use GrantSubscriptionManager for write access.",
-                nameof(role));
-        }
-
+        EnsureDefined(role);
         Role = role;
-
-        // Losing Owner also loses the write role: it may never outlive its prerequisite.
-        if (role != AppRole.Owner)
-        {
-            IsSubscriptionManager = false;
-        }
-
         Touch(nowUtc);
     }
 
     /// <summary>
-    /// Grants the Phase 5 write role. Requires the Owner read role, so a Viewer can never
-    /// reach a money-affecting operation.
+    /// Re-derives Owner from the directory at sign-in (ADR-018). An admin is upgraded to Owner; a
+    /// former admin is downgraded to Viewer. Analyst and Viewer are left alone for non-admins,
+    /// because those are MLCP's own assignments.
     /// </summary>
-    public void GrantSubscriptionManager(DateTimeOffset nowUtc)
+    /// <returns>The previous role when it changed; otherwise null.</returns>
+    public AppRole? ApplyDirectoryAdminStatus(bool isDirectoryAdmin, DateTimeOffset nowUtc)
     {
-        if (Role != AppRole.Owner)
+        var previous = Role;
+        var desired = isDirectoryAdmin
+            ? AppRole.Owner
+            : Role == AppRole.Owner ? AppRole.Viewer : Role;
+
+        if (desired == previous)
         {
-            throw new DomainException("Only an Owner can also hold the SubscriptionManager role.");
+            return null;
         }
 
-        IsSubscriptionManager = true;
-        Touch(nowUtc);
+        ChangeRole(desired, nowUtc);
+        return previous;
     }
 
-    public void RevokeSubscriptionManager(DateTimeOffset nowUtc)
+    /// <summary>Keeps the displayed identity in step with the directory.</summary>
+    public void UpdateProfile(string upn, string displayName, DateTimeOffset nowUtc)
     {
-        IsSubscriptionManager = false;
+        ArgumentException.ThrowIfNullOrWhiteSpace(upn);
+        ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
+
+        if (string.Equals(Upn, upn, StringComparison.Ordinal)
+            && string.Equals(DisplayName, displayName, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Upn = upn;
+        DisplayName = displayName;
         Touch(nowUtc);
     }
 
@@ -124,6 +146,14 @@ public class AppUser : TenantEntity
     {
         LastSeenUtc = nowUtc;
         Touch(nowUtc);
+    }
+
+    private static void EnsureDefined(AppRole role)
+    {
+        if (role is not (AppRole.Owner or AppRole.Analyst or AppRole.Viewer))
+        {
+            throw new ArgumentException("Role must be Owner, Analyst or Viewer.", nameof(role));
+        }
     }
 
     /// <summary>Persistence projection of <see cref="ScopeSubscriptionIds"/> as a JSON column.</summary>

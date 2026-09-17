@@ -9,22 +9,34 @@
     Synchronisation has stopped. We are no longer reading anything from your Microsoft tenant.
 </p>
 
+<partial name="_Message" />
+
 @if (Model.DeleteScheduledUtc is { } scheduled)
 {
     <div class="alert alert-warning" role="status">
         All of your data will be permanently deleted on
-        <strong>@scheduled.ToString("d MMMM yyyy")</strong>. Until then you can reconnect and pick
-        up where you left off.
+        <strong>@scheduled.ToString("d MMMM yyyy")</strong>. Until then an administrator can cancel
+        the disconnect and pick up where you left off.
     </div>
 }
 
-<p class="text-muted">
-    You should also remove MLCP from
-    <strong>Entra admin centre &rarr; Enterprise applications</strong> to revoke the permissions
-    themselves. Disconnecting here stops us using them; removing the application there withdraws
-    them entirely.
-</p>
+@if (Model.IsDirectoryAdmin)
+{
+    <form asp-action="CancelDisconnect" method="post" class="mb-4">
+        <button type="submit" class="btn btn-primary">Keep my organisation connected</button>
+        <span class="text-muted small ms-2">You may be asked to sign in again.</span>
+    </form>
+}
+else
+{
+    <p>
+        A Global Administrator or Privileged Role Administrator can cancel the disconnect from this
+        page.
+    </p>
+}
 
-<p>
-    <a class="btn btn-outline-primary" asp-action="Index">Reconnect</a>
+<p class="text-muted">
+    To withdraw the permissions themselves, also remove MLCP from
+    <strong>Entra admin centre &rarr; Enterprise applications</strong>. Disconnecting here stops us
+    using them; removing the application there withdraws them entirely.
 </p>

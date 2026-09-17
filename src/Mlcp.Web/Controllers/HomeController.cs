@@ -11,29 +11,26 @@ namespace Mlcp.Web.Controllers;
 public sealed class HomeController : Controller
 {
     private readonly IOnboardingRepository _repository;
-    private readonly ILogger<HomeController> _logger;
+    private readonly RegionPicker _regions;
 
-    public HomeController(IOnboardingRepository repository, ILogger<HomeController> logger)
+    public HomeController(IOnboardingRepository repository, RegionPicker regions)
     {
         _repository = repository;
-        _logger = logger;
+        _regions = regions;
     }
 
     /// <summary>
     /// The landing page. Anonymous visitors get the marketing page; signed-in users go to their
-    /// dashboard, or to onboarding when their tenant is not connected yet.
+    /// dashboard when the tenant is active, and to the connection page otherwise — which covers
+    /// not connected, finishing, needs re-consent and disconnected alike.
     /// </summary>
-    /// <remarks>
-    /// A signed-in user whose organisation has not connected sees the demo dashboard rather
-    /// than a dead end, because the first person from an organisation to arrive is usually not
-    /// an administrator and needs something to show their admin (ADR-008).
-    /// </remarks>
     [AllowAnonymous]
     public async Task<IActionResult> Index(CancellationToken cancellationToken)
     {
         if (!User.TryGetSignedInUser(out var user))
         {
-            return View("Landing");
+            Request.Cookies.TryGetValue(RegionPicker.PreferenceCookie, out var preferred);
+            return View("Landing", _regions.Landing(preferred));
         }
 
         var tenant = await _repository.FindTenantAsync(user.TenantId, cancellationToken);
@@ -43,14 +40,15 @@ public sealed class HomeController : Controller
             return RedirectToAction("Index", "Onboarding");
         }
 
-        if (tenant.Status == TenantStatus.NeedsReconsent)
-        {
-            _logger.LogInformation("Tenant {TenantId} needs re-consent; routing to onboarding.", user.TenantId);
-            return RedirectToAction("Index", "Onboarding");
-        }
-
         return View("Dashboard", tenant);
     }
+
+    /// <summary>
+    /// Manual price entry (ADR-006) arrives in Phase 1. The checklist links here, so the link says
+    /// so instead of failing.
+    /// </summary>
+    [HttpGet("prices")]
+    public IActionResult Prices() => View("PricesComingSoon");
 
     [AllowAnonymous]
     public IActionResult Privacy() => View();

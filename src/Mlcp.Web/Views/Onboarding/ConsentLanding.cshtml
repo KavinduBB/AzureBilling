@@ -12,27 +12,7 @@
 
 <h2 class="h5">What we ask for</h2>
 
-<table class="table align-middle">
-    <thead>
-        <tr>
-            <th scope="col">Permission</th>
-            <th scope="col">What it lets us read</th>
-            <th scope="col">What it does not do</th>
-        </tr>
-    </thead>
-    <tbody>
-        <tr>
-            <td>Read organisation information</td>
-            <td>Purchased licences and subscription renewal dates</td>
-            <td>Nothing about individual users</td>
-        </tr>
-        <tr>
-            <td>Read all users' basic profiles</td>
-            <td>Which licences are assigned to whom, and whether accounts are active</td>
-            <td>Cannot read email, files, messages or passwords; cannot change anything</td>
-        </tr>
-    </tbody>
-</table>
+<partial name="_PermissionsTable" />
 
 <p class="text-muted">
     You will see this list again on Microsoft's own consent screen before anything is granted, and
@@ -40,9 +20,17 @@
     <strong>Entra admin centre &rarr; Enterprise applications</strong>.
 </p>
 
-<form asp-action="Connect" method="post">
-    @Html.AntiForgeryToken()
-    <button type="submit" class="btn btn-primary">Review permissions and connect</button>
-</form>
+@if (Model.IsDirectoryAdmin)
+{
+    <partial name="_ConnectForm" model="Model.Region" />
+}
+else
+{
+    <div class="alert alert-warning" role="note">
+        Connecting needs a <strong>Global Administrator</strong> or <strong>Privileged Role
+        Administrator</strong>. You are signed in without either role, so please pass this request
+        to someone who holds one. If you have just been given the role, sign out and in again.
+    </div>
+}
 
 <p class="text-muted small mt-3">This request expires on @Model.ExpiresUtc.ToString("d MMMM yyyy").</p>

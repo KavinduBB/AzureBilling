@@ -7,9 +7,11 @@
 <h1>Connect your organisation</h1>
 
 <p class="lead">
-    Hello @Model.DisplayName. We can see you are signed in, but nobody has connected your
-    organisation to MLCP yet. Connecting takes one administrator about a minute.
+    Hello @Model.DisplayName. You are signed in, but your organisation is not connected to MLCP
+    yet. Connecting takes a Global Administrator or Privileged Role Administrator about a minute.
 </p>
+
+<partial name="_Message" />
 
 @if (sentTo is not null)
 {
@@ -20,44 +22,44 @@
         {
             <text>The link works until @expires.ToString("d MMMM yyyy").</text>
         }
-        You can send it again if it has not arrived.
     </div>
 }
 
 <div class="row g-4 mt-2">
-    <div class="col-md-6">
-        <div class="card h-100">
-            <div class="card-body">
-                <h2 class="h5 card-title">I am an administrator</h2>
-                <p class="card-text">
-                    You will see exactly which permissions we ask for before you accept, and you
-                    can revoke them at any time.
-                </p>
-
-                <form asp-action="Connect" method="post">
-                    @Html.AntiForgeryToken()
-                    <button type="submit" class="btn btn-primary">Connect as administrator</button>
-                </form>
+    @if (Model.IsDirectoryAdmin)
+    {
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h2 class="h5 card-title">Connect as administrator</h2>
+                    <p class="card-text">
+                        You will see exactly which permissions we ask for on Microsoft's consent
+                        screen before you accept, and you can revoke them at any time.
+                    </p>
+                    <partial name="_ConnectForm" model="Model.Region" />
+                </div>
             </div>
         </div>
-    </div>
+    }
 
     <div class="col-md-6">
         <div class="card h-100">
             <div class="card-body">
                 <h2 class="h5 card-title">Ask my administrator</h2>
                 <p class="card-text">
-                    We will email them this page with a one-click link. Nothing happens until
-                    they accept.
+                    @if (!Model.IsDirectoryAdmin)
+                    {
+                        <text>Connecting needs a Global Administrator or Privileged Role Administrator.</text>
+                    }
+                    We will email them a link to a page explaining the request. Nothing happens
+                    until they accept. The address must be in one of your organisation's domains.
                 </p>
 
                 <form asp-action="RequestConsent" method="post" class="row g-2">
-                    @Html.AntiForgeryToken()
                     <div class="col-12">
                         <label for="adminEmail" class="form-label">Administrator email</label>
                         <input type="email" class="form-control" id="adminEmail" name="adminEmail"
-                               required autocomplete="email" placeholder="admin@@yourcompany.com" />
-                        <span asp-validation-for="@("adminEmail")" class="text-danger"></span>
+                               required maxlength="254" autocomplete="email" placeholder="admin@@yourcompany.com" />
                     </div>
                     <div class="col-12">
                         <button type="submit" class="btn btn-outline-primary">
@@ -72,30 +74,12 @@
 
 <h2 class="h5 mt-5">What we ask for, and what we cannot do</h2>
 
-<table class="table align-middle">
-    <thead>
-        <tr>
-            <th scope="col">Permission</th>
-            <th scope="col">What it lets us read</th>
-            <th scope="col">What it does not do</th>
-        </tr>
-    </thead>
-    <tbody>
-        <tr>
-            <td>Read organisation information</td>
-            <td>Your purchased licences and subscription renewal dates</td>
-            <td>Nothing about individual users</td>
-        </tr>
-        <tr>
-            <td>Read all users' basic profiles</td>
-            <td>Which licences are assigned to which people, and whether accounts are active</td>
-            <td>Cannot read email, files, messages or passwords; cannot change anything</td>
-        </tr>
-    </tbody>
-</table>
+<partial name="_PermissionsTable" />
 
 <p class="text-muted">
     We never buy, assign or remove licences with these permissions. Access can be revoked at any
     time from <strong>Entra admin centre &rarr; Enterprise applications &rarr; MLCP &rarr;
     Permissions</strong>.
 </p>
+
+<partial name="_Preview" />

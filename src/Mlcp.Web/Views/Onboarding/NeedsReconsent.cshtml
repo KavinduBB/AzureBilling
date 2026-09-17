@@ -1,0 +1,60 @@
+@model Mlcp.Web.Models.NeedsReconsentViewModel
+@{
+    ViewData["Title"] = "Your organisation needs to reconnect";
+}
+
+<h1>Your organisation needs to reconnect</h1>
+
+<p class="lead">@Model.Reason</p>
+
+<partial name="_Message" />
+
+<p>
+    Your existing data is kept and still readable
+    @if (Model.Since is { } since)
+    {
+        <text>(it was last refreshed before @since.ToString("d MMMM yyyy HH:mm") UTC)</text>
+    }
+    . We check automatically every few hours and reconnect as soon as access is restored.
+</p>
+
+@if (Model.IsDirectoryAdmin)
+{
+    <div class="row g-4 mt-2">
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h2 class="h5 card-title">Already fixed it?</h2>
+                    <p class="card-text">
+                        If you restored MLCP in <strong>Entra admin centre &rarr; Enterprise
+                        applications</strong>, ask us to check now instead of waiting.
+                    </p>
+                    <form asp-action="CheckAgain" method="post">
+                        <input type="hidden" name="TenantId" value="@Model.TenantId" />
+                        <button type="submit" class="btn btn-outline-primary">Check again</button>
+                    </form>
+                    <p class="text-muted small mt-2">You can check once every five minutes.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h2 class="h5 card-title">Grant access again</h2>
+                    <p class="card-text">
+                        Repeat the administrator consent. Nothing already collected is lost.
+                    </p>
+                    <partial name="_ConnectForm" model="Model.Region" />
+                </div>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    <div class="alert alert-warning" role="note">
+        A Global Administrator or Privileged Role Administrator in your organisation needs to
+        reconnect MLCP. Ask them to sign in here, or to follow
+        <a asp-controller="Guides" asp-action="ConnectOrganisation">the connection guide</a>.
+    </div>
+}

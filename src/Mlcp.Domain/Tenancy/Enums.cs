@@ -89,19 +89,25 @@ public enum OnboardingStepStatus
 }
 
 /// <summary>In-application role, distinct from any Microsoft role (docs/03-architecture.md §4.4).</summary>
+/// <remarks>
+/// The Phase 5 write role is deliberately absent. <c>SubscriptionManager</c> is an Entra app role
+/// that arrives in the token's <c>roles</c> claim and is never stored here, so nothing inside
+/// MLCP can grant write capability (ADR-023). Value 4 is retired and must not be reused.
+/// </remarks>
 public enum AppRole
 {
     Unknown = 0,
 
-    /// <summary>Full read, manages application users and settings.</summary>
+    /// <summary>
+    /// Full read, manages application users and settings. Derived at every sign-in from the
+    /// token's <c>wids</c> claim (a directory role that can grant tenant-wide consent), never
+    /// granted by MLCP (ADR-018).
+    /// </summary>
     Owner = 1,
 
     /// <summary>Full read plus manual price entry.</summary>
     Analyst = 2,
 
-    /// <summary>Dashboards only.</summary>
+    /// <summary>Dashboards only. The default for everyone who is not a directory admin.</summary>
     Viewer = 3,
-
-    /// <summary>Phase 5 write operations. Always additional to a read role.</summary>
-    SubscriptionManager = 4,
 }

@@ -155,6 +155,76 @@ public class OnboardingChecklistTests
         checklist.OutstandingActions.Should().Contain(prices);
     }
 
+    [Theory]
+    [InlineData(CapabilityUnavailableReason.NoBillingAccount, RemediationGuide.None)]
+    [InlineData(CapabilityUnavailableReason.NotMca, RemediationGuide.None)]
+    [InlineData(CapabilityUnavailableReason.BillingRoleMissing, RemediationGuide.BillingRole)]
+    public void An_undetermined_tenant_is_always_offered_guide_c(CapabilityUnavailableReason reason, RemediationGuide probeGuide)
+    {
+        // ADR-020: Guide C is the one step that reveals the agreement, so it must never be hidden
+        // behind a guess.
+        var tenant = TenantWith(AgreementType.Undetermined);
+        var profile = TenantCapabilityProfile.Undiscovered(tenant.TenantId, Now);
+        profile.MarkUnavailable(new CapabilityUnavailable(Capability.BillingTransactions, reason, probeGuide), Now);
+
+        var checklist = OnboardingChecklist.Build(tenant, profile);
+
+        var prices = checklist.Items.Single(i => i.Key == "billing-role");
+        prices.IsActionable.Should().BeTrue();
+        prices.Guide.Should().Be(RemediationGuide.BillingRole);
+        prices.Detail.Should().Be(OnboardingChecklist.UndeterminedBillingCopy);
+        prices.Unavailable!.Reason.Should().Be(reason, "the typed reason is kept for metrics");
+        checklist.OutstandingActions.Should().Contain(prices);
+        checklist.OffersManualPricing.Should().BeTrue();
+    }
+
+    [Fact]
+    public void An_undetermined_tenant_keeps_guide_b_actionable()
+    {
+        var tenant = TenantWith(AgreementType.Undetermined);
+
+        var profile = ProfileFrom(
+            tenant.TenantId,
+            new GraphProbeResult(true, true, false),
+            ArmProbeResult.NotReachable,
+            BillingProbeResult.NotReachable);
+
+        var checklist = OnboardingChecklist.Build(tenant, profile);
+
+        checklist.OutstandingActions.Select(i => i.Key).Should().Contain(["azure-rbac", "billing-role"]);
+    }
+
+    [Fact]
+    public void A_mosa_tenant_is_not_given_the_undetermined_prompt()
+    {
+        var tenant = TenantWith(AgreementType.Mosa);
+
+        var profile = ProfileFrom(
+            tenant.TenantId,
+            new GraphProbeResult(true, true, false),
+            ArmProbeResult.NotReachable,
+            BillingProbeResult.NotReachable);
+
+        var checklist = OnboardingChecklist.Build(tenant, profile);
+
+        checklist.Items.Single(i => i.Key == "billing-role").Detail
+            .Should().NotBe(OnboardingChecklist.UndeterminedBillingCopy);
+    }
+
+    [Fact]
+    public void Manual_pricing_is_not_offered_to_an_mca_tenant_with_billing_access()
+    {
+        var tenant = TenantWith(AgreementType.Mca);
+
+        var profile = ProfileFrom(
+            tenant.TenantId,
+            new GraphProbeResult(true, true, true),
+            new ArmProbeResult([new AzureSubscriptionProbe(Guid.NewGuid(), "Prod", AgreementType.Mca)], true),
+            new BillingProbeResult([new BillingAccountProbe("ba", AgreementType.Mca)], true, true));
+
+        OnboardingChecklist.Build(tenant, profile).OffersManualPricing.Should().BeFalse();
+    }
+
     [Fact]
     public void Every_incomplete_item_carries_something_to_show_the_user()
     {

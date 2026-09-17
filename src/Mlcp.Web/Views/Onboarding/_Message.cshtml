@@ -1,0 +1,5 @@
+@* A one-off status message set by the previous action. Always a fixed server string. *@
+@if (TempData["OnboardingMessage"] is string message)
+{
+    <div class="alert alert-info" role="status">@message</div>
+}
