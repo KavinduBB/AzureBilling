@@ -20,6 +20,12 @@ public enum SyncJobType
     SnapshotJob = 14,
     AssociatedTenantDiscovery = 15,
     TenantDeletion = 16,
+
+    /// <summary>Confirms admin consent with an app-only call after the consent callback (ADR-018).</summary>
+    ConsentVerification = 17,
+
+    /// <summary>Floor-only re-probe of a tenant flagged NeedsReconsent (ADR-016 rule 5).</summary>
+    ReconsentProbe = 18,
 }
 
 /// <summary>
