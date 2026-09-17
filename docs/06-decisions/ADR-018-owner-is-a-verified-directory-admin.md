@@ -22,7 +22,7 @@ The review found two flaws in how Owners are created:
   - Privileged Role Administrator `e8611ab8-c189-46e8-94e1-60213ab1f814`
 
   ([admin consent roles](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/grant-admin-consent)).
-- `wids` is emitted because the core registration sets `groupMembershipClaims: "DirectoryRole"` ([group claims and app roles](https://learn.microsoft.com/en-us/security/zero-trust/develop/configure-tokens-group-claims-app-roles)).
+- `wids` is emitted because the core registration sets `groupMembershipClaims: "DirectoryRole"` ([group claims and app roles](https://learn.microsoft.com/en-us/security/zero-trust/develop/configure-tokens-group-claims-app-roles)). Microsoft Learn documents `wids` explicitly for access tokens; for ID tokens the evidence is the group-claims page ("ID or access tokens") and the Blazor Entra roles guide. **P0-2 acceptance includes confirming `wids` in a real ID token from a second test tenant.** If it is absent, the fallback is a delegated `GET /me/memberOf/microsoft.graph.directoryRole` at sign-in, which needs only `User.Read`.
 - The role is re-evaluated at **every sign-in**. `AppUser.Role` is recorded for display and audit, and is upgraded to or downgraded from Owner to match. A demoted admin loses Owner at their next sign-in, and destructive actions re-check the live claim (below).
 - Everyone else from the tenant is **Viewer** until an Owner changes their role (Analyst in Phase 1, P1-10). Pre-consent sign-ins are Viewer.
 

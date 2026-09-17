@@ -10,7 +10,7 @@ namespace Mlcp.Web.Models;
 /// </param>
 public sealed record DeploymentOptions(string Region)
 {
-    public static DeploymentOptions Default { get; } = new("westeurope");
+    public static DeploymentOptions Default { get; } = new("eu");
 }
 
 /// <summary>The region statement shown before an administrator connects (ADR-021).</summary>

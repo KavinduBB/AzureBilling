@@ -40,7 +40,7 @@ var keyVaultUri = builder.Configuration["Mlcp:KeyVaultUri"];
 
 if (!string.IsNullOrWhiteSpace(keyVaultUri))
 {
-    builder.Configuration.AddAzureKeyVault(new Uri(keyVaultUri), new DefaultAzureCredential());
+    builder.Configuration.AddAzureKeyVault(new Uri(keyVaultUri), new DefaultAzureCredential(), new UnmanagedSecretsOnlyManager());
 }
 
 // Outside Development every silent fallback below is a deployment bug, so the host refuses to
@@ -119,8 +119,21 @@ var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
 
 if (!string.IsNullOrWhiteSpace(redisConnectionString))
 {
-    var redis = new Lazy<Task<IConnectionMultiplexer>>(
-        async () => await ConnectionMultiplexer.ConnectAsync(redisConnectionString).ConfigureAwait(false));
+    // Azure Managed Redis has access keys disabled (ADR-026): the connection authenticates as the
+    // web app's managed identity (AZURE_CLIENT_ID) and the library refreshes the token.
+    var useEntraAuth = builder.Configuration.GetValue<bool>("Mlcp:Redis:UseEntraAuth");
+
+    var redis = new Lazy<Task<IConnectionMultiplexer>>(async () =>
+    {
+        var options = ConfigurationOptions.Parse(redisConnectionString);
+
+        if (useEntraAuth)
+        {
+            await options.ConfigureForAzureWithTokenCredentialAsync(new DefaultAzureCredential()).ConfigureAwait(false);
+        }
+
+        return await ConnectionMultiplexer.ConnectAsync(options).ConfigureAwait(false);
+    });
 
     builder.Services.AddSingleton(redis);
     builder.Services.AddStackExchangeRedisCache(options =>

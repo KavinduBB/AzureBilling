@@ -20,7 +20,7 @@ A `CostScopeResolver` in `Mlcp.Application/Costs` picks, per tenant and per sync
 | Rung | Scope | When | Access needed |
 |---|---|---|---|
 | 1 | MCA **billing profile** (one query per profile), or EA **billing account** | Agreement is MCA/EA and a billing role is granted (tier 4) | MCA: Billing profile reader / Billing account reader. EA: Enterprise read-only |
-| 2 | **Root management group** | Agreement is EA or MOSP (pay-as-you-go), and Cost Management Reader is at root MG | RBAC (tier 3) |
+| 2 | **Root management group** | Agreement is EA or MOSP (pay-as-you-go), and Cost Management Reader is at root MG. Learn names the MCA and CSP exclusions; support for pay-as-you-go is inferred from their absence, so the resolver treats a failed rung-2 probe as "try rung 3" | RBAC (tier 3) |
 | 3 | **Per subscription** | MCA or CSP (Azure plan) subscriptions with RBAC but no billing role; or no MG assignment | RBAC on each subscription |
 
 **Rules**

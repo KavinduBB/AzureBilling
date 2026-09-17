@@ -8,6 +8,7 @@ using Mlcp.Integration.Graph;
 using Mlcp.Persistence;
 using Mlcp.Persistence.Stores;
 using Mlcp.Shared;
+using Mlcp.Shared.Identity;
 using Mlcp.Shared.Logging;
 using Mlcp.Shared.Resilience;
 using Mlcp.Sync.Jobs;
@@ -20,7 +21,7 @@ var keyVaultUri = builder.Configuration["Mlcp:KeyVaultUri"];
 
 if (!string.IsNullOrWhiteSpace(keyVaultUri))
 {
-    builder.Configuration.AddAzureKeyVault(new Uri(keyVaultUri), new DefaultAzureCredential());
+    builder.Configuration.AddAzureKeyVault(new Uri(keyVaultUri), new DefaultAzureCredential(), new UnmanagedSecretsOnlyManager());
 }
 
 builder.Services.AddMlcpSerilog(builder.Configuration);

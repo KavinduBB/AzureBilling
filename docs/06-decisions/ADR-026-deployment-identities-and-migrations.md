@@ -9,7 +9,7 @@ The deployment review found five problems:
 - **Migrations can't reach SQL.** The `migrate` job runs on a GitHub-hosted runner, but SQL and Key Vault have public access disabled. It also runs *after* the new image is rolled out.
 - **First deploy fails.** The first deployment cannot pull images, because nothing grants `AcrPull`.
 - **Sign-in has no credential.** The web app has no client credential in Azure, so code redemption at sign-in fails.
-- **Redis creation may be blocked.** Azure Cache for Redis blocks new instances for existing customers from 1 Oct 2026 ([retirement FAQ](https://learn.microsoft.com/en-us/azure/azure-cache-for-redis/retirement-faq)).
+- **Redis is on a retirement path.** Azure Cache for Redis (Basic/Standard/Premium) retires on 30 Sep 2028, and new customers have been blocked from creating instances since 1 Apr 2026. A block for existing customers was announced and later withdrawn ([retirement FAQ](https://learn.microsoft.com/en-us/azure/azure-cache-for-redis/retirement-faq), checked 2026-09-17). A new product should not start on it, and the old template also needed an access key.
 
 ## Decision
 
@@ -42,13 +42,13 @@ The deployment review found five problems:
    6. Shift traffic to 100%.
    7. Deactivate the old revision.
 4. `/health/ready` checks SQL (`AddDbContextCheck`), Redis and Key Vault reachability. `/health/live` is process-only. The smoke test uses `/health/ready` on the revision-specific FQDN.
-5. Operator data-plane steps (certificate creation, SQL user creation) are scripted as the same migrate job (`--create-users` mode, using `CREATE USER … FROM EXTERNAL PROVIDER` with the identities' names). No workstation access to private endpoints is needed. Key Vault certificate creation uses the control-plane-authorised `az keyvault certificate create`, run from the job's image, or via a temporary IP allow rule documented in `infra/deploy.md`.
+5. Operator data-plane steps (certificate creation, SQL user creation) are scripted as the same migrate job (`--create-users` mode, using `CREATE USER [mlcp_web_user] WITH SID = <client id>, TYPE = E`, which needs no Microsoft Graph lookup, so the SQL server does not need the *Directory Readers* role that `FROM EXTERNAL PROVIDER` requires when a service principal runs it). No workstation access to private endpoints is needed. Key Vault certificate creation uses the control-plane-authorised `az keyvault certificate create`, run from the job's image, or via a temporary IP allow rule documented in `infra/deploy.md`.
 
 **Other fixes**
 
 - **AcrPull.** Granted in Bicep to the web, worker and migrator identities, through a module scoped to the registry's resource group. The apps module depends on it.
 - **Sign-in credential.**
-  - The web app sets `AzureAd__ClientCredentials__0__SourceType=KeyVault`, plus the Key Vault URL, certificate name, and `AzureAd__ClientCredentials__0__ManagedIdentityClientId` (the web identity).
+  - The web app sets `AzureAd__ClientCredentials__0__SourceType=KeyVault`, plus `__KeyVaultUrl`, `__KeyVaultCertificateName` and `__ManagedIdentityClientId` (the web identity). These names were checked against Microsoft.Identity.Web 4.14.2.
   - Token acquisition is enabled only for sign-in code redemption; no downstream scopes in Phase 0.
   - The MSAL distributed cache is encrypted (`MsalDistributedTokenCacheAdapterOptions.Encrypt = true`), with Data Protection keys in Key Vault (rule 3).
 - **Redis.** Moves to **Azure Managed Redis** (`Microsoft.Cache/redisEnterprise`) with Entra (managed identity) authentication through `Microsoft.Azure.StackExchangeRedis`, so no access keys exist. Local development still uses the Redis container.
