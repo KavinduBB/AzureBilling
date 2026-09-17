@@ -83,7 +83,7 @@ Visitor ── signs in (core app, delegated User.Read) ──► tenant row exi
                 nonce single-use in Redis; Microsoft's tenant == caller tid; the callback proves nothing)
                                                           ▼
                 verify: app-only token for tid → GET /organization
-                   ├─ 200 ─────────────────────────────► Tenant.GrantConsent → Provisioning
+                   ├─ 200 ─────────────────────────────► Tenant.ConfirmConsent → Provisioning
                    ├─ AADSTS700016 / 7000229 (propagation) ─► ConsentPendingVerification
                    │        └─ ConsentVerification job at +2, +5, +15 min ─► Provisioning, or back to NotConnected
                    └─ anything else ─► "Consent could not be confirmed" (stays NotConnected)
