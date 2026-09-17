@@ -10,12 +10,12 @@ Read `docs/00-README.md` first, then `docs/01-scope-and-scenarios.md`. Do not st
 
 ## Stack (fixed — do not substitute)
 
-- .NET 9, ASP.NET Core — single deployable: MVC + Razor views for UI, API controllers under `/api/v1`
-- Entity Framework Core 9 → Azure SQL Database (SQL Server locally via Docker)
+- .NET 10 (LTS), ASP.NET Core — single deployable (ADR-014; supersedes ADR-011): MVC + Razor views for UI, API controllers under `/api/v1`
+- Entity Framework Core 10 → Azure SQL Database (SQL Server locally via Docker)
 - Microsoft.Identity.Web (MSAL) for Entra ID; multi-tenant app, `AzureADMultipleOrgs`
 - Microsoft.Graph SDK (v5+), Azure.ResourceManager.* SDKs (Billing, CostManagement, Consumption); raw `HttpClient` where an SDK lags the REST surface
-- Azure Service Bus for job fan-out; Container Apps Jobs for workers (locally: `dotnet run` worker project)
-- Redis (StackExchange.Redis) for MSAL distributed token cache + read cache
+- Azure Service Bus for job fan-out; long-running Container App worker with sessions, Container Apps Jobs for migrations/overflow (ADR-026; locally: `dotnet run` worker project)
+- Azure Managed Redis (StackExchange.Redis, Entra auth) for the encrypted MSAL distributed token cache, consent nonces and read cache (ADR-026)
 - Azure Key Vault + Managed Identity for secrets; locally: user-secrets
 - Polly for resilience; Serilog for structured logging
 - Frontend: server-rendered Razor + htmx + Chart.js. **No SPA framework.**
@@ -50,13 +50,13 @@ Dependency direction: `Web → Application → Domain`; `Persistence`, `Integrat
 3. **No user access/refresh tokens in application tables.** MSAL distributed cache only, encrypted with Data Protection keys from Key Vault.
 4. **No secrets in config or code.** Key Vault via Managed Identity; `dotnet user-secrets` locally.
 5. **Never call Microsoft APIs from a request handler to render a dashboard.** Dashboards read SQL. Sync jobs call Microsoft. The only interactive Microsoft calls are onboarding probes and explicit user-triggered actions (e.g. invoice PDF download, lifecycle ops).
-6. **All sync writes go through the SyncRun pipeline:** staging table → validation gate → single-transaction MERGE on natural key → status update. Live tables are never partially written. Validation gate blocks row-count drops >50% vs last successful run.
-7. **Every Microsoft call goes through the Polly policy set in `Mlcp.Shared.Resilience`:** honour `Retry-After` and `x-ms-ratelimit-microsoft.consumption-retry-after`; exponential backoff with jitter; per-(tenant, provider) circuit breaker; 401/403 → mark tenant `NeedsReconsent`, stop retrying.
-8. **Cost Management Query:** always send `ClientType: Mlcp` header; query at billing-account or management-group scope grouped by `SubscriptionId`/`ResourceGroupName`; never loop per subscription or per resource group.
+6. **All sync writes go through the SyncRun pipeline:** staging table → validation gate → single transaction (inside the EF execution strategy) containing the MERGE on natural key **and** the run's `Succeeded` status → staging cleanup. Live tables are never partially written. The gate blocks empty responses and >50% drops vs the last successful run's **staged** count, for full loads, per period, with an audited operator override (ADR-013, ADR-024). One run per (tenant, job) at a time.
+7. **Every Microsoft call goes through the Polly policy set in `Mlcp.Shared.Resilience`:** honour `Retry-After`, `x-ms-ratelimit-microsoft.consumption-retry-after` and `x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after`; exponential backoff with jitter; per-(tenant, provider) circuit breaker; never retry 401/403. Failures are classified per ADR-016: only a lost core grant or a 401/403 on a Graph floor call marks the tenant `NeedsReconsent`; a 401/403 elsewhere marks only that capability unavailable; transient errors keep the previous verdict; MLCP credential failures alert ops and never flag tenants. `NeedsReconsent` tenants are re-probed automatically.
+8. **Cost Management Query:** always send `ClientType: Mlcp` header; query at the widest supported scope chosen by `CostScopeResolver` (billing profile/account → root management group → per subscription; ADR-017); always group server-side by `SubscriptionId`/`ResourceGroupName`; never loop per resource group; per-subscription queries only when no wider scope is supported, sequential and under the QPU budget.
 9. **Unavailable data is a typed reason, not null.** `Unavailable*Provider` classes return `CapabilityUnavailable(Reason)`. UI renders the reason. Empty charts are a bug.
 10. **Money is `decimal`. Every money column has an adjacent currency column. Never sum across currencies.**
 11. **Nullable means unknowable.** `AutoRenewEnabled = null` means "no API exposes this for this tenant." Never default to false.
-12. **Write operations (purchase, cancel, quantity, auto-renew toggle) are delegated-identity only,** behind app role `SubscriptionManager`, per-tenant feature flag, pre-flight window check, confirmation with financial impact, and an audit row written before the outbound call.
+12. **Write operations (purchase, cancel, quantity, auto-renew toggle) are delegated-identity only,** behind the Entra app role `SubscriptionManager` (ADR-023), per-tenant feature flag, pre-flight window check, confirmation with financial impact, and an audit Attempt row written before the outbound call and an Outcome row after it. `AuditLog` is append-only, enforced by database permissions (ADR-019).
 13. **Do not persist invoice download URLs.** They are short-lived SAS tokens. Fetch on demand.
 14. **Redact before logging.** `Authorization` headers, tokens, secrets, SAS URLs. Log correlation IDs.
 15. **Do not invent Microsoft API endpoints, permissions, or fields.** If it isn't in `docs/02-api-reference.md` or verifiable on Microsoft Learn, stop and ask.
@@ -79,6 +79,8 @@ Dependency direction: `Web → Application → Domain`; `Persistence`, `Integrat
 - When you add a capability, add the corresponding `Unavailable*` reason and the UI explanatory state in the same PR.
 - Run `dotnet test --filter Category=TenantIsolation` before any PR touching Persistence, Application, or Web.
 - Update `docs/06-decisions/` with an ADR when you make a choice that future you would question.
+- Owner is a verified directory admin (`wids` claim), never the first user to sign in; the consent callback is verified with an app-only call, never trusted (ADR-018).
+- Build with the .NET 10 SDK (`global.json`). Integration tests need Docker, or set `MLCP_TEST_SQL` to a disposable SQL Server connection string.
 
 ## Current phase
 

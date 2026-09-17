@@ -78,7 +78,7 @@ public class RlsCoverageTests
 
         var missingFilter = context.Model.GetEntityTypes()
             .Where(e => e.ClrType.IsAssignableTo(typeof(ITenantScoped)) && !e.IsOwned())
-            .Where(e => e.GetQueryFilter() is null)
+            .Where(e => e.GetDeclaredQueryFilters().Count == 0)
             .Select(e => e.ClrType.Name)
             .ToList();
 
