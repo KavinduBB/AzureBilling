@@ -51,4 +51,7 @@ public enum CapabilityUnavailableReason
 
     /// <summary>Report anonymisation is on, so named per-user data cannot be produced.</summary>
     UsageAnonymised = 14,
+
+    /// <summary>The capability was available and its role or permission has since been removed (ADR-016).</summary>
+    RoleRevoked = 15,
 }

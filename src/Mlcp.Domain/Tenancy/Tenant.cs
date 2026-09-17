@@ -38,6 +38,25 @@ public class Tenant : ITenantScoped
 
     public DateTimeOffset? DeleteScheduledUtc { get; private set; }
 
+    /// <summary>When the customer disconnected. Distinct from <see cref="DeleteScheduledUtc"/>.</summary>
+    public DateTimeOffset? DisconnectedUtc { get; private set; }
+
+    /// <summary>
+    /// When an administrator last returned from the Entra consent screen. Used for the
+    /// service-principal propagation window (ADR-016 rule 3); not proof of consent.
+    /// </summary>
+    public DateTimeOffset? ConsentCallbackUtc { get; private set; }
+
+    /// <summary>Why the tenant needs re-consent (ADR-016 classification). Null otherwise.</summary>
+    public string? NeedsReconsentReason { get; private set; }
+
+    public DateTimeOffset? NeedsReconsentSinceUtc { get; private set; }
+
+    /// <summary>When the automatic floor re-probe should next run (ADR-016 rule 5).</summary>
+    public DateTimeOffset? NextReconsentProbeUtc { get; private set; }
+
+    public int ReconsentProbeAttempts { get; private set; }
+
     public DateTimeOffset CreatedUtc { get; private set; }
 
     public DateTimeOffset UpdatedUtc { get; private set; }
@@ -51,9 +70,8 @@ public class Tenant : ITenantScoped
     }
 
     /// <summary>
-    /// Records a tenant at first sign-in, before any consent. The tenant exists in
-    /// <see cref="TenantStatus.Provisioning"/> only once an admin has consented; until then
-    /// callers should treat it as not connected.
+    /// Records a tenant at first sign-in, before any consent. The tenant is
+    /// <see cref="TenantStatus.NotConnected"/> until consent is verified (ADR-018).
     /// </summary>
     public static Tenant Register(Guid tenantId, string displayName, string? defaultDomain, string region, DateTimeOffset nowUtc)
     {
@@ -71,7 +89,7 @@ public class Tenant : ITenantScoped
             DisplayName = displayName,
             DefaultDomain = defaultDomain,
             Region = region,
-            Status = TenantStatus.Provisioning,
+            Status = TenantStatus.NotConnected,
             AgreementTypePrimary = AgreementType.NotDiscovered,
             Features = TenantFeatures.Default,
             CreatedUtc = nowUtc,
@@ -79,18 +97,45 @@ public class Tenant : ITenantScoped
         };
     }
 
-    /// <summary>Records the admin consent callback. Idempotent: re-consent refreshes the grant.</summary>
-    public void GrantConsent(Guid grantedByObjectId, DateTimeOffset nowUtc)
+    /// <summary>
+    /// An administrator returned from the consent screen, but consent has not yet been
+    /// confirmed with an app-only call (ADR-018). Never changes a tenant in its grace period.
+    /// </summary>
+    public void AwaitConsentVerification(Guid administratorObjectId, DateTimeOffset nowUtc)
     {
-        if (Status == TenantStatus.Deleted)
+        EnsureNotDeletedOrDisconnected();
+
+        ConsentCallbackUtc = nowUtc;
+        ConsentGrantedByObjectId = administratorObjectId;
+
+        if (Status is TenantStatus.NotConnected or TenantStatus.Unknown)
         {
-            throw new DomainException("Cannot grant consent on a deleted tenant.");
+            Status = TenantStatus.ConsentPendingVerification;
         }
+
+        UpdatedUtc = nowUtc;
+    }
+
+    /// <summary>
+    /// An app-only call to the tenant succeeded, so consent is real (ADR-018). Idempotent.
+    /// A tenant that needed re-consent returns straight to <see cref="TenantStatus.Active"/>.
+    /// Never cancels a scheduled deletion: that is <see cref="CancelDeletion"/>, Owner-only.
+    /// </summary>
+    public void ConfirmConsent(Guid grantedByObjectId, DateTimeOffset nowUtc)
+    {
+        EnsureNotDeletedOrDisconnected();
 
         ConsentGrantedUtc = nowUtc;
         ConsentGrantedByObjectId = grantedByObjectId;
-        Status = TenantStatus.Provisioning;
-        DeleteScheduledUtc = null;
+
+        Status = Status switch
+        {
+            TenantStatus.NeedsReconsent => TenantStatus.Active,
+            TenantStatus.Active => TenantStatus.Active,
+            _ => TenantStatus.Provisioning,
+        };
+
+        ClearReconsentState();
         UpdatedUtc = nowUtc;
     }
 
@@ -102,26 +147,89 @@ public class Tenant : ITenantScoped
             throw new DomainException("Cannot activate a tenant that has not granted consent.");
         }
 
+        if (Status is not (TenantStatus.Provisioning or TenantStatus.Active))
+        {
+            throw new DomainException($"Cannot activate a tenant in status {Status}.");
+        }
+
         Status = TenantStatus.Active;
         UpdatedUtc = nowUtc;
     }
 
     /// <summary>
-    /// Consent was revoked or app-only auth returned 401/403. Sync must stop; the tenant's
-    /// existing data is retained and remains readable.
+    /// The core grant was lost or a Graph floor call was refused (ADR-016). Sync stops; data is
+    /// retained and readable; automatic re-probes are scheduled. Repeated calls keep the
+    /// original <see cref="NeedsReconsentSinceUtc"/>.
     /// </summary>
-    public void MarkNeedsReconsent(DateTimeOffset nowUtc)
+    public void MarkNeedsReconsent(string reason, DateTimeOffset nowUtc)
     {
-        if (Status is TenantStatus.Deleted or TenantStatus.GracePeriod)
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+        if (Status is not (TenantStatus.Provisioning or TenantStatus.Active or TenantStatus.NeedsReconsent))
         {
             return;
         }
 
+        if (Status != TenantStatus.NeedsReconsent)
+        {
+            NeedsReconsentSinceUtc = nowUtc;
+            ReconsentProbeAttempts = 0;
+            NextReconsentProbeUtc = nowUtc + ReconsentProbeDelay(0, TimeSpan.Zero);
+        }
+
         Status = TenantStatus.NeedsReconsent;
+        NeedsReconsentReason = reason;
         UpdatedUtc = nowUtc;
     }
 
-    /// <summary>Customer-initiated disconnect. Starts the retention clock (docs/03 §8).</summary>
+    /// <summary>An automatic floor re-probe still failed. Schedules the next one (ADR-016 rule 5).</summary>
+    public void RecordReconsentProbeFailed(DateTimeOffset nowUtc)
+    {
+        if (Status != TenantStatus.NeedsReconsent)
+        {
+            return;
+        }
+
+        ReconsentProbeAttempts++;
+        var elapsed = nowUtc - (NeedsReconsentSinceUtc ?? nowUtc);
+        NextReconsentProbeUtc = nowUtc + ReconsentProbeDelay(ReconsentProbeAttempts, elapsed);
+        UpdatedUtc = nowUtc;
+    }
+
+    /// <summary>A floor re-probe succeeded without the customer visiting MLCP.</summary>
+    public void RestoreConsent(DateTimeOffset nowUtc)
+    {
+        if (Status != TenantStatus.NeedsReconsent)
+        {
+            return;
+        }
+
+        Status = TenantStatus.Active;
+        ClearReconsentState();
+        UpdatedUtc = nowUtc;
+    }
+
+    /// <summary>True when an automatic re-probe is due.</summary>
+    public bool IsDueForReconsentProbe(DateTimeOffset nowUtc)
+        => Status == TenantStatus.NeedsReconsent
+            && NextReconsentProbeUtc is { } due
+            && due <= nowUtc;
+
+    /// <summary>+1 h, +6 h, +24 h, then daily for 30 days, then weekly (ADR-016 rule 5).</summary>
+    public static TimeSpan ReconsentProbeDelay(int attemptsSoFar, TimeSpan elapsedSinceFlagged)
+        => attemptsSoFar switch
+        {
+            0 => TimeSpan.FromHours(1),
+            1 => TimeSpan.FromHours(6),
+            2 => TimeSpan.FromHours(24),
+            _ when elapsedSinceFlagged < TimeSpan.FromDays(30) => TimeSpan.FromDays(1),
+            _ => TimeSpan.FromDays(7),
+        };
+
+    /// <summary>
+    /// Customer-initiated disconnect. Starts the retention clock (docs/03 §8). Idempotent: a
+    /// repeated disconnect does not push the deletion date back.
+    /// </summary>
     public void BeginGracePeriod(DateTimeOffset nowUtc, TimeSpan retention)
     {
         if (Status == TenantStatus.Deleted)
@@ -129,12 +237,18 @@ public class Tenant : ITenantScoped
             throw new DomainException("Tenant is already deleted.");
         }
 
+        if (Status == TenantStatus.GracePeriod)
+        {
+            return;
+        }
+
         Status = TenantStatus.GracePeriod;
+        DisconnectedUtc = nowUtc;
         DeleteScheduledUtc = nowUtc + retention;
         UpdatedUtc = nowUtc;
     }
 
-    /// <summary>Reverses a disconnect while still inside the grace period.</summary>
+    /// <summary>Reverses a disconnect while still inside the grace period. Owner-only (ADR-018).</summary>
     public void CancelDeletion(DateTimeOffset nowUtc)
     {
         if (Status != TenantStatus.GracePeriod)
@@ -142,10 +256,17 @@ public class Tenant : ITenantScoped
             throw new DomainException("Only a tenant in the grace period can cancel deletion.");
         }
 
-        Status = ConsentGrantedUtc is null ? TenantStatus.Provisioning : TenantStatus.Active;
+        Status = ConsentGrantedUtc is null ? TenantStatus.NotConnected : TenantStatus.Active;
         DeleteScheduledUtc = null;
+        DisconnectedUtc = null;
         UpdatedUtc = nowUtc;
     }
+
+    /// <summary>True when the scheduled deletion is due. Re-checked inside the delete transaction.</summary>
+    public bool IsDueForDeletion(DateTimeOffset nowUtc)
+        => Status == TenantStatus.GracePeriod
+            && DeleteScheduledUtc is { } due
+            && due <= nowUtc;
 
     public void MarkDeleted(DateTimeOffset nowUtc)
     {
@@ -182,4 +303,25 @@ public class Tenant : ITenantScoped
 
     /// <summary>True when sync jobs are permitted to call Microsoft for this tenant.</summary>
     public bool IsSyncEligible => Status is TenantStatus.Provisioning or TenantStatus.Active;
+
+    private void EnsureNotDeletedOrDisconnected()
+    {
+        if (Status == TenantStatus.Deleted)
+        {
+            throw new DomainException("Cannot change consent on a deleted tenant.");
+        }
+
+        if (Status == TenantStatus.GracePeriod)
+        {
+            throw new DomainException("The tenant is disconnected. An Owner must cancel the disconnect first.");
+        }
+    }
+
+    private void ClearReconsentState()
+    {
+        NeedsReconsentReason = null;
+        NeedsReconsentSinceUtc = null;
+        NextReconsentProbeUtc = null;
+        ReconsentProbeAttempts = 0;
+    }
 }

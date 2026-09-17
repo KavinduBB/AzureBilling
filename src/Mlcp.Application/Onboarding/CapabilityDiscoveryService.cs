@@ -129,7 +129,7 @@ public sealed class CapabilityDiscoveryService
         else
         {
             step.Fail("Graph licensing is not readable, so the universal floor cannot be synced.", now);
-            tenant.MarkNeedsReconsent(now);
+            tenant.MarkNeedsReconsent("GraphFloorUnreadable", now);
         }
 
         await _store.SaveChangesAsync(cancellationToken).ConfigureAwait(false);

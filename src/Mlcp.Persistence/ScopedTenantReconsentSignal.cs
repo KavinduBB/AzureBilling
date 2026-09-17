@@ -61,7 +61,7 @@ public sealed class ScopedTenantReconsentSignal : ITenantReconsentSignal
             return;
         }
 
-        tenant.MarkNeedsReconsent(_timeProvider.GetUtcNow());
+        tenant.MarkNeedsReconsent($"{provider}:{statusCode}", _timeProvider.GetUtcNow());
         await _context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
         _logger.LogError(

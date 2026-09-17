@@ -16,7 +16,7 @@ public class OnboardingChecklistTests
     private static Tenant TenantWith(AgreementType agreement, bool partnerManaged = false)
     {
         var tenant = Tenant.Register(Guid.NewGuid(), "Contoso", "contoso.example", "westeurope", Now);
-        tenant.GrantConsent(Guid.NewGuid(), Now);
+        tenant.ConfirmConsent(Guid.NewGuid(), Now);
         tenant.SetAgreementType(agreement, Now);
         tenant.SetPartnerManagement(partnerManaged, partnerManaged ? Guid.NewGuid() : null, Now);
         return tenant;

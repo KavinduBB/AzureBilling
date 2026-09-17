@@ -42,7 +42,7 @@ public class TenantDeletionTests
         await using var system = _fixture.CreateContext(FixedTenantContext.System);
 
         var tenant = Tenant.Register(tenantId, $"Tenant {tenantId:N}", "example.test", "westeurope", Now);
-        tenant.GrantConsent(Guid.NewGuid(), Now);
+        tenant.ConfirmConsent(Guid.NewGuid(), Now);
         tenant.Activate(Now);
         tenant.BeginGracePeriod(Now.AddDays(-31), TimeSpan.FromDays(30));
         system.Tenants.Add(tenant);

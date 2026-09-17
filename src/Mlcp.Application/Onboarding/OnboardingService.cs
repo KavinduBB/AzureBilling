@@ -241,7 +241,7 @@ public sealed class OnboardingService
             await _repository.AddTenantAsync(tenant, cancellationToken).ConfigureAwait(false);
         }
 
-        tenant.GrantConsent(admin.ObjectId, now);
+        tenant.ConfirmConsent(admin.ObjectId, now);
 
         var pending = await _repository.FindOpenConsentRequestAsync(admin.TenantId, cancellationToken)
             .ConfigureAwait(false);

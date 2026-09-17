@@ -17,8 +17,20 @@ public enum TenantStatus
     /// <summary>Disconnected by the customer; data retained until <c>DeleteScheduledUtc</c>.</summary>
     GracePeriod = 4,
 
-    /// <summary>Hard-deleted. Row retained only to satisfy the audit certificate.</summary>
+    /// <summary>
+    /// Transient in-memory marker only: deletion removes the tenant row, and the
+    /// <c>DeletionCertificate</c> is the durable record (ADR-019).
+    /// </summary>
     Deleted = 5,
+
+    /// <summary>Someone from the tenant has signed in; no admin consent yet (docs/03 §3).</summary>
+    NotConnected = 6,
+
+    /// <summary>
+    /// An admin returned from the consent screen; waiting for an app-only call to confirm it
+    /// (service-principal propagation, ADR-018).
+    /// </summary>
+    ConsentPendingVerification = 7,
 }
 
 /// <summary>
@@ -47,6 +59,12 @@ public enum AgreementType
 
     /// <summary>Discovery ran but could not classify the tenant.</summary>
     Unknown = 6,
+
+    /// <summary>
+    /// The agreement cannot be seen with the grants we hold (no Azure or billing visibility).
+    /// Not evidence of MOSA (ADR-020).
+    /// </summary>
+    Undetermined = 7,
 }
 
 /// <summary>Steps of the onboarding state machine. Persisted one row per tenant per step.</summary>

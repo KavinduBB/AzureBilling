@@ -59,7 +59,7 @@ public class TenantDeletionServiceTests
     private static Tenant ExpiredTenant(Guid id, string name, FakeTimeProvider clock)
     {
         var tenant = Tenant.Register(id, name, null, "westeurope", clock.GetUtcNow().AddDays(-60));
-        tenant.GrantConsent(Guid.NewGuid(), clock.GetUtcNow().AddDays(-60));
+        tenant.ConfirmConsent(Guid.NewGuid(), clock.GetUtcNow().AddDays(-60));
         tenant.Activate(clock.GetUtcNow().AddDays(-60));
         tenant.BeginGracePeriod(clock.GetUtcNow().AddDays(-31), TimeSpan.FromDays(30));
         return tenant;
@@ -155,7 +155,7 @@ public class TenantDeletionServiceTests
     {
         var clock = new FakeTimeProvider(Now);
         var tenant = Tenant.Register(Guid.NewGuid(), "Contoso", null, "westeurope", clock.GetUtcNow());
-        tenant.GrantConsent(Guid.NewGuid(), clock.GetUtcNow());
+        tenant.ConfirmConsent(Guid.NewGuid(), clock.GetUtcNow());
         tenant.Activate(clock.GetUtcNow());
         tenant.BeginGracePeriod(clock.GetUtcNow(), TimeSpan.FromDays(30));
 
