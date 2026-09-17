@@ -30,13 +30,15 @@ var vnetName = '${namePrefix}-${environmentName}-vnet'
 // at all, depending on the firewall. Each zone overrides that resolution inside the VNet.
 var privateDnsZoneNames = [
   'privatelink${environment().suffixes.sqlServerHostname}'
-  'privatelink.redis.cache.windows.net'
+  // Azure Managed Redis (Microsoft.Cache/redisEnterprise), not the retired Azure Cache for Redis
+  // zone (ADR-026).
+  'privatelink.redis.azure.net'
   'privatelink.servicebus.windows.net'
   'privatelink.vaultcore.azure.net'
   'privatelink.blob.${environment().suffixes.storage}'
 ]
 
-resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
+resource vnet 'Microsoft.Network/virtualNetworks@2025-07-01' = {
   name: vnetName
   location: location
   properties: {
@@ -71,14 +73,14 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
   }
 }
 
-resource privateDnsZones 'Microsoft.Network/privateDnsZones@2020-06-01' = [
+resource privateDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [
   for zoneName in privateDnsZoneNames: {
     name: zoneName
     location: 'global'
   }
 ]
 
-resource privateDnsZoneLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = [
+resource privateDnsZoneLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = [
   for (zoneName, i) in privateDnsZoneNames: {
     name: '${zoneName}/${vnetName}-link'
     location: 'global'

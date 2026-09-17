@@ -1,0 +1,71 @@
+# Migration image (ADR-026). Contains:
+#   /app/efbundle         self-contained EF Core migration bundle (Container Apps job "<base>-migrate")
+#   /opt/sqlcmd/sqlcmd    go-sqlcmd, for infra/sql/*.sql (job "<base>-create-users")
+#   /app/sql/*.sql        the scripts
+#
+# Build context is the repository root:
+#   docker build -f src/Mlcp.Persistence/Dockerfile.migrate -t mlcp-migrate .
+
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS build
+WORKDIR /src
+
+# Keeps development user secrets and settings out of the bundle's design-time host.
+ENV ASPNETCORE_ENVIRONMENT=Production \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_NOLOGO=1
+
+# dotnet-ef comes from the tool manifest, so the bundle is built with the pinned EF tooling.
+COPY global.json Directory.Build.props Directory.Packages.props ./
+COPY .config/dotnet-tools.json .config/
+RUN dotnet tool restore
+
+COPY src/Mlcp.Domain/Mlcp.Domain.csproj src/Mlcp.Domain/
+COPY src/Mlcp.Shared/Mlcp.Shared.csproj src/Mlcp.Shared/
+COPY src/Mlcp.Application/Mlcp.Application.csproj src/Mlcp.Application/
+COPY src/Mlcp.Persistence/Mlcp.Persistence.csproj src/Mlcp.Persistence/
+COPY src/Mlcp.Integration.Graph/Mlcp.Integration.Graph.csproj src/Mlcp.Integration.Graph/
+COPY src/Mlcp.Integration.Azure/Mlcp.Integration.Azure.csproj src/Mlcp.Integration.Azure/
+COPY src/Mlcp.Integration.Partner/Mlcp.Integration.Partner.csproj src/Mlcp.Integration.Partner/
+COPY src/Mlcp.Web/Mlcp.Web.csproj src/Mlcp.Web/
+RUN dotnet restore src/Mlcp.Web/Mlcp.Web.csproj -r linux-x64
+
+COPY . .
+
+# The bundle applies migrations through the design-time factory (MlcpDbContextFactory). The job
+# passes --connection, which replaces the factory's local default.
+RUN dotnet dotnet-ef migrations bundle \
+      --project src/Mlcp.Persistence \
+      --startup-project src/Mlcp.Web \
+      --configuration Release \
+      --self-contained \
+      --target-runtime linux-x64 \
+      --output /out/efbundle \
+      --force
+
+# go-sqlcmd (https://github.com/microsoft/go-sqlcmd). Supports
+# --authentication-method ActiveDirectoryManagedIdentity with -U <user-assigned identity client id>.
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-noble AS sqlcmd
+ARG SQLCMD_VERSION=1.10.0
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl bzip2 ca-certificates \
+ && mkdir -p /opt/sqlcmd \
+ && curl -fsSL "https://github.com/microsoft/go-sqlcmd/releases/download/v${SQLCMD_VERSION}/sqlcmd-linux-amd64.tar.bz2" \
+    | tar -xj -C /opt/sqlcmd sqlcmd \
+ && /opt/sqlcmd/sqlcmd --version
+
+# runtime-deps, not chiseled: it includes ICU, which SqlClient needs outside invariant
+# globalization mode, and a shell, which helps when debugging a failed job execution.
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-noble AS runtime
+WORKDIR /app
+
+ENV ASPNETCORE_ENVIRONMENT=Production
+
+COPY --from=build /out/efbundle /app/efbundle
+COPY --from=sqlcmd /opt/sqlcmd/sqlcmd /opt/sqlcmd/sqlcmd
+COPY infra/sql/ /app/sql/
+
+USER $APP_UID
+
+# Each Container Apps job sets its own command; running the image without one applies migrations.
+ENTRYPOINT []
+CMD ["/app/efbundle", "--verbose"]

@@ -2,22 +2,26 @@
 #
 #   docker compose up -d
 #
-# Nothing here is production shaped. In Azure these are Azure SQL, Azure Cache for Redis,
-# Azure Service Bus and Storage, all reached over Private Endpoints with Managed Identity
-# (docs/03-architecture.md §8). The passwords below are local-only and are meant to be in the
-# repository: there is nothing to protect on a throwaway container.
+# Nothing here resembles production. In Azure these are Azure SQL, Azure Managed Redis and
+# Azure Service Bus, reached over private endpoints with managed identities
+# (docs/03-architecture.md §8, ADR-026). The passwords below are for local use only and are
+# committed on purpose: a throwaway container has nothing to protect.
+#
+# Azurite is not included: no code uses local storage. Data Protection keys are kept in memory
+# locally, and the tenant-region directory has an in-memory implementation (ADR-021).
 
 name: mlcp
 
 services:
+  # Application database. The Service Bus emulator also keeps its state here, in its own database.
   sql:
     image: mcr.microsoft.com/mssql/server:2022-latest
     container_name: mlcp-sql
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "Local_Dev_Password_1"
-      # Row-level security needs no particular edition, but Developer matches Azure SQL's
-      # feature surface more closely than Express does.
+      # Row-level security works on any edition. Developer is closer to Azure SQL's feature set
+      # than Express.
       MSSQL_PID: "Developer"
     ports:
       - "1433:1433"
@@ -34,6 +38,8 @@ services:
       retries: 20
       start_period: 30s
 
+  # Stands in for Azure Managed Redis. Locally there are no Entra tokens: leave
+  # Mlcp:Redis:UseEntraAuth unset and use ConnectionStrings:Redis=localhost:6379.
   redis:
     image: redis:7-alpine
     container_name: mlcp-redis
@@ -46,19 +52,11 @@ services:
       timeout: 3s
       retries: 10
 
-  azurite:
-    image: mcr.microsoft.com/azure-storage/azurite:latest
-    container_name: mlcp-azurite
-    command: ["azurite", "--blobHost", "0.0.0.0", "--queueHost", "0.0.0.0", "--tableHost", "0.0.0.0"]
-    ports:
-      - "10000:10000"
-      - "10001:10001"
-      - "10002:10002"
-    volumes:
-      - azurite-data:/data
-
-  # The sync pipeline is driven by Service Bus (docs/03-architecture.md §6.1), so a local
-  # queue is needed to run the worker end to end rather than only under test doubles.
+  # Service Bus emulator
+  # (https://learn.microsoft.com/en-us/azure/service-bus-messaging/test-locally-with-service-bus-emulator).
+  # It requires SQL Server, and uses the sql service above. The emulator has no Entra support, so
+  # locally both apps use ConnectionStrings:ServiceBus:
+  #   Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
   servicebus:
     image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
     container_name: mlcp-servicebus
@@ -70,11 +68,10 @@ services:
       SQL_SERVER: sql
       MSSQL_SA_PASSWORD: "Local_Dev_Password_1"
     ports:
-      - "5672:5672"
-      - "5300:5300"
+      - "5672:5672" # AMQP
+      - "5300:5300" # management and health: http://localhost:5300/health
     volumes:
       - ./infra/local/servicebus-config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
 
 volumes:
   sql-data:
-  azurite-data:
