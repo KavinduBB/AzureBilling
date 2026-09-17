@@ -59,6 +59,8 @@ public static class TenantSeed
             tenantId, Guid.NewGuid(), "a@example.test", "admin@example.test", TimeSpan.FromDays(14), Now));
         system.TenantCapabilityProfiles.Add(TenantCapabilityProfile.Undiscovered(tenantId, Now));
         system.SyncRuns.Add(SyncRun.Start(tenantId, SyncJobType.LicenseSkuSync, "corr", Now));
+        system.SyncGateOverrides.Add(SyncGateOverride.Approve(
+            tenantId, SyncJobType.LicenseSkuSync, "seeded override", "ops@example.test", Now));
         system.AuditLogs.Add(AuditLog.ForSystem(
             tenantId, AuditAction.TenantConnected, nameof(Tenant), tenantId.ToString(), AuditOutcome.Succeeded, "corr", Now));
 

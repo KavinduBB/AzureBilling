@@ -36,6 +36,7 @@ public sealed class TenantDeletionStore : ITenantDeletionStore
     public static IReadOnlyList<string> DeletionOrder { get; } =
     [
         DeletionCertificate.AuditLogTableName,
+        "SyncGateOverride",
         "SyncRun",
         "PendingConsentRequest",
         "OnboardingStep",
